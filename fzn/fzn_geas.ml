@@ -1077,18 +1077,19 @@ module IntCore : sig
         min_delta := min (b - st.lb) !min_delta ;
         min_coeff := min st.coeff !min_coeff ;
         s + st.lb, x :: xs) (0, []) core in
-    Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ;
-    List.iter (fun x ->
-        let st = H.find state.thresholds x in
-        if st.coeff = !min_coeff then
-          H.remove state.thresholds x
-        else
-          H.replace state.thresholds x { st with coeff = st.coeff - !min_coeff }
-      ) xs ;
+    (* Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ; *)
     state.obj_lb <- state.obj_lb + !min_coeff * !min_delta ;
-    let d_core = { lb = s + !min_delta ; coeff = !min_coeff }, xs in
-    state.pending <- d_core :: state.pending ;
-    ()
+    begin
+      List.iter (fun x ->
+          let st = H.find state.thresholds x in
+          if st.coeff = !min_coeff then
+            H.remove state.thresholds x
+          else
+            H.replace state.thresholds x { st with coeff = st.coeff - !min_coeff }
+        ) xs ;
+      let d_core = { lb = s + !min_delta ; coeff = !min_coeff }, xs in
+      state.pending <- d_core :: state.pending
+    end
 
   (* Search for a solution to the current subproblem *)
   let try_state solver state limits =
@@ -1111,18 +1112,76 @@ module IntCore : sig
     in
     Sol.retract_all solver ;
     result
-   
+
+  let solve_with_assumption solver at limits =
+    if not (Sol.assume solver at) then
+      Sol.UNSAT
+    else if time_is_exceeded solver limits then
+      Sol.UNKNOWN
+    else
+      Sol.solve solver limits
+
+  let probe_lb solver state x b =
+  match !Opts.obj_probe_limit with
+  | None -> b (* Don't probe *)
+  | Some probe_lim ->
+    (* Set up limits for probe steps. *)
+    let limits =
+      let l = !Opts.limits in
+      if l.Sol.max_conflicts > 0 then
+        (fun () ->
+          let rlim = relative_limits solver l in
+          { rlim with
+              Sol.max_conflicts = min probe_lim (rlim.Sol.max_conflicts) })
+      else
+        (fun () -> { (relative_limits solver l)
+                     with Sol.max_conflicts = probe_lim })
+    in
+    let ub = Sol.ivar_ub x in
+    let rec aux lb step =
+      (* Format.fprintf Format.err_formatter "%% Probe step: %d@." step ; *)
+      if lb > ub then
+        lb
+      else
+        let _ = Sol.retract_all solver in
+        let lb' = min ub (lb + step) in
+        match solve_with_assumption solver (Sol.ivar_le x lb') (limits ()) with
+        | Sol.UNSAT ->
+          begin
+            let core = Sol.get_conflict solver in
+            assert (Array.length core <= 1) ;
+            if Array.length core = 0 then
+              ub+1
+            else
+              let (_, lb'') = lb_of_atom state.pred_map core.(0) in
+              aux lb'' (1 + 2 * step)
+          end
+        | Sol.SAT | Sol.UNKNOWN -> lb
+      in
+      let b' = aux b 0 in
+      Sol.retract_all solver ;
+      b'
+
   (* Introduce the penalty term for a delayed core. *)
   let apply_core solver state (term, vars) =
-    let lb = term.lb in
-    let ub = lb + (state.obj_ub - state.obj_lb) / term.coeff in
-    let ts = List.map (fun x -> 1, x) vars |> Array.of_list in
-    (* Create the new penalyt term *)
-    let p = Sol.new_intvar solver lb ub in
-    let _ = B.linear_le solver At.at_True (Array.append [|-1, p|] ts) 0 in
-    H.add state.pred_map (Sol.ivar_pred p) p ;
-    H.add state.thresholds p term ;
-    ()
+    match vars with
+    | [x] ->
+      begin
+        let lb' = probe_lb solver state x term.lb in
+        state.obj_lb <- state.obj_lb + term.coeff * (lb' - term.lb) ;
+        H.add state.thresholds x { term with lb = lb' }
+      end
+    | _ ->
+      begin
+        let lb = term.lb in
+        let ub = lb + (state.obj_ub - state.obj_lb) / term.coeff in
+        let ts = List.map (fun x -> 1, x) vars |> Array.of_list in
+        (* Create the new penalyt term *)
+        let p = Sol.new_intvar solver lb ub in
+        let _ = B.linear_le solver At.at_True (Array.append [|-1, p|] ts) 0 in
+        H.add state.pred_map (Sol.ivar_pred p) p ;
+        H.add state.thresholds p term ;
+      end
     
   let decrease_coeff state =
     let new_coeff = ref 1 in
@@ -1145,6 +1204,7 @@ module IntCore : sig
     state.pending <- rest ;
     vio
 
+
   let rec solve config solver state =
     if state.obj_lb = state.obj_ub then
       Opt state.incumbent
@@ -1152,7 +1212,7 @@ module IntCore : sig
       match try_state solver state (relative_limits solver config.limits) with
       | SAT m ->
          begin
-           Format.fprintf Format.err_formatter "%% Found model.@." ;
+           (* Format.fprintf Format.err_formatter "%% Found model.@." ; *)
            update_incumbent config solver state m ;
            let _ = match split_cores state m with
              (* No over-violated cores *)
@@ -1165,8 +1225,21 @@ module IntCore : sig
          begin
            if Array.length core > 0 then
              begin
-              factor_core state core ;
-              Format.fprintf Format.err_formatter "%%%% Found core, new lb: %d@." state.obj_lb ;
+              let core' =
+              (*
+                if Array.length core = 1 then
+                  let (x, b) = lb_of_atom state.pred_map core.(0) in
+                  let b' = probe_lb solver state x b in
+                  [| Sol.ivar_ge x b' |]
+                else
+                  *)
+                  core in
+              factor_core state core' ;
+              let _ = if !Opts.verbosity > 1 then
+                Format.fprintf Format.err_formatter "%%%% Found core of size %d, new lb: %d@." (Array.length core) state.obj_lb ;
+                if !Opts.verbosity > 2 then
+                  config.print_nogood core'
+              in
               solve config solver state
              end
            else
