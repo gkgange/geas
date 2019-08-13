@@ -1308,13 +1308,23 @@ let minimize_uc print_model print_nogood solver obj xs k : Solver.model option =
         let obj_lb, thresholds = init_thresholds solver ts in
         (* Run stratified core-driven optimization until we use up our budget *)
         match solve_core_strat print_model print_nogood solver obj m pred_map thresholds (next_coeff thresholds max_int) [] (k + obj_lb) core_limits with ( *)
-        let core_config = {
-          IntCore.print_model = print_model fmt ;
-          IntCore.print_nogood = print_nogood fmt ;
-          IntCore.limits = core_limits
-        } in
-        let core_state = IntCore.init_state obj xs k m in
-        match IntCore.solve core_config solver core_state with
+        let core_result =
+          match !Opts.core_type with
+          | Opts.SliceCore ->
+             let ts = Array.to_list xs in
+             let pred_map = build_pred_map solver ts in
+             let obj_lb, thresholds = init_thresholds solver ts in
+             solve_core_strat print_model print_nogood solver obj m pred_map thresholds (next_coeff thresholds max_int) [] (k + obj_lb) core_limits
+          | Opts.IntCore ->
+            let core_config = {
+            IntCore.print_model = print_model fmt ;
+            IntCore.print_nogood = print_nogood fmt ;
+            IntCore.limits = core_limits
+            } in
+            let core_state = IntCore.init_state obj xs k m in
+            IntCore.solve core_config solver core_state
+        in
+        match core_result with
         (* *)
         | Sat (model, lb, thresholds) ->
           (* If we haven't proven optimality yet, reformulate the objective, and switch

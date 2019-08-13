@@ -14,6 +14,10 @@ type reform_mode =
   | ReformEach
   | ReformEager
 
+type core_type =
+  | IntCore
+  | SliceCore
+
 let infile = ref None
 let outfile = ref None
 let verbosity = ref 0
@@ -38,6 +42,7 @@ let core_harden = ref false
 
 let core_selection = ref Violation
 let core_reformulation = ref ReformEach
+let core_type = ref SliceCore
 
 let one_watch = ref true
 let global_diff = ref true
@@ -136,6 +141,14 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
       Arg.Bool (fun b -> core_harden := b),
       " : whether to attempt to harden bounds during unsat core iterations (default: false)."
      ) ;
+     (
+       "--core-type",
+       Arg.Symbol (["int" ; "slice"], fun s ->
+         core_type := match s with
+           | "int" -> IntCore
+           | "slice" -> SliceCore
+           | s -> failwith (Format.sprintf "ERROR: Unexpected core type \"%s\"" s)),
+       " : choose the type of unsat-core reformulation.") ;
      (
       "--reformulate",
       Arg.Tuple
