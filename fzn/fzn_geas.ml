@@ -6,7 +6,7 @@ module L = List
 module U = Util
 
 open Token
-module P = Parser
+module P = FznParser
 
 module Pr = Problem
 module Simp = Simplify
@@ -49,10 +49,23 @@ let print_atom problem env =
     with Not_found ->
       Format.fprintf fmt "x%d >= %s" (Int32.to_int at.At.pid) (Int64.to_string @@ At.to_int at.At.value))
 
+let ivar_name problem env =
+  (* Build translation table *)
+  let ivar_names = H.create 17 in
+  Dy.iteri (fun idx info ->
+    H.add ivar_names env.ivars.(idx) info.Pr.id
+  ) problem.Pr.ivals ;
+  (* Now, the actual function *)
+  (fun x ->
+    try H.find ivar_names x
+    with Not_found -> Format.sprintf "x%d" (Int32.to_int (Sol.ivar_pred x)))
+
 let print_nogood problem env =
   let pp_atom = print_atom problem env in
   (fun fmt nogood ->
-    Util.print_array ~pre:"%% @[[" ~post:"]@]@." ~sep:",@ " pp_atom fmt nogood)
+    (* Util.print_array ~pre:"%% @[[" ~post:"]@]@." ~sep:",@ " pp_atom fmt nogood *)
+    Util.print_array ~pre:"%% NOGOOD: " ~post:"@." ~sep:", " pp_atom fmt nogood
+  )
 
 (* Replace variable identifiers with the corresponding
  * intvar/atom *)
@@ -709,7 +722,7 @@ let process_core solver pred_map thresholds core =
 
 let trim_core solver pred_map thresholds core =
   if Array.length core = 1 then
-    let _ = if !Opts.verbosity > 1 then Format.fprintf Format.err_formatter "%% singleton@." in
+    let _ = if !Opts.verbosity > 3 then Format.fprintf Format.err_formatter "%% singleton@." in
     let (x, b) = lb_of_atom pred_map core.(0) in
     let st = H.find thresholds x in
     assert(b > st.lb) ;
@@ -758,7 +771,7 @@ let core_violation_score mode m =
 let split_cores m cores =
   let score_core = core_violation_score !Opts.core_selection m in
   (* let _ = Format.fprintf Format.err_formatter "%% Pending: %d@." (List.length cores) in *)
-  let _ = if !Opts.verbosity > 1 then
+  let _ = if !Opts.verbosity > 3 then
     Util.print_list ~post:"@]]@." Format.pp_print_int Format.err_formatter (List.map (fun c -> core_violations m c) cores) in
   let rec aux cost vio_cores def_cores pending =
     match pending with
@@ -980,15 +993,17 @@ let rec solve_core_strat print_model print_nogood solver obj incumbent pred_map 
  *)
 module IntCore : sig
   type state
+
   type configuration = {
     print_model : Sol.model -> unit ;
     print_nogood : At.t array -> unit ;
+    ivar_name : Sol.intvar -> string ;
     limits : Sol.limits ;
   }
 
   val init_state : Sol.intvar -> (int * Sol.intvar) array -> int -> Sol.model -> state
   val solve : configuration -> Sol.solver -> state -> core_result
-  end = struct
+end = struct
   type oterm = {
     coeff : int ;
     lb : int ;
@@ -999,6 +1014,7 @@ module IntCore : sig
   type configuration = {
     print_model : Sol.model -> unit ;
     print_nogood : At.t array -> unit ;
+    ivar_name : Sol.intvar -> string ;
     limits : Sol.limits ;
   }
 
@@ -1051,7 +1067,7 @@ module IntCore : sig
       let x_ub = st.lb + (gap / st.coeff) in
       Sol.post_atom solver (Sol.ivar_le x x_ub)) state.thresholds true
 
-  let update_incumbent config solver state m =
+  let update_incumbent (config : configuration) solver state m =
     let m_obj = Sol.int_value m state.obj in
     let _ =
       if m_obj < state.obj_ub then
@@ -1163,7 +1179,15 @@ module IntCore : sig
       b'
 
   (* Introduce the penalty term for a delayed core. *)
-  let apply_core solver state (term, vars) =
+  let print_penalty config x vars =
+    if !Opts.verbosity > 2 then
+      begin
+        Format.fprintf Format.err_formatter
+          "%% VAR: %s = " (config.ivar_name x) ;
+        Util.print_list Format.pp_print_string ~pre:"" ~post:"" ~sep:"+" Format.err_formatter (List.map config.ivar_name vars)
+      end
+
+  let apply_core config solver state (term, vars) =
     match vars with
     | [x] ->
       begin
@@ -1176,8 +1200,9 @@ module IntCore : sig
         let lb = term.lb in
         let ub = lb + (state.obj_ub - state.obj_lb) / term.coeff in
         let ts = List.map (fun x -> 1, x) vars |> Array.of_list in
-        (* Create the new penalyt term *)
+        (* Create the new penalty term *)
         let p = Sol.new_intvar solver lb ub in
+        let _ = print_penalty config p vars in
         let _ = B.linear_le solver At.at_True (Array.append [|-1, p|] ts) 0 in
         H.add state.pred_map (Sol.ivar_pred p) p ;
         H.add state.thresholds p term ;
@@ -1217,7 +1242,7 @@ module IntCore : sig
            let _ = match split_cores state m with
              (* No over-violated cores *)
             | [] -> decrease_coeff state
-            | vio_cores -> List.iter (apply_core solver state) vio_cores
+            | vio_cores -> List.iter (apply_core config solver state) vio_cores
            in
            solve config solver state
          end
@@ -1248,7 +1273,7 @@ module IntCore : sig
       | UNKNOWN ->
          let ovars = H.create 17 in
          let _ = H.iter (fun x st -> H.add ovars x (as_ovar_state st.coeff st.lb)) state.thresholds in
-         List.iter (apply_core solver state) state.pending ;
+         List.iter (apply_core config solver state) state.pending ;
          Sat (state.incumbent, state.obj_lb, ovars)
 end
 
@@ -1363,7 +1388,7 @@ let rebuild_objective solver thresholds lb ub =
   let _ = Builtins.slice_linear_le solver At.at_True (Array.of_list (t_obj :: !ts)) (- lb) in
   rev_obj
     
-let minimize_uc print_model print_nogood solver obj xs k : Solver.model option =
+let minimize_uc print_model print_nogood get_ivar_name solver obj xs k : Solver.model option =
     let fmt = Format.std_formatter in
     (* Format.fprintf fmt "[ k = %d ]@." k ; *)
     let overall_limits = !Opts.limits in
@@ -1392,6 +1417,7 @@ let minimize_uc print_model print_nogood solver obj xs k : Solver.model option =
             let core_config = {
             IntCore.print_model = print_model fmt ;
             IntCore.print_nogood = print_nogood fmt ;
+            IntCore.ivar_name = get_ivar_name ;
             IntCore.limits = core_limits
             } in
             let core_state = IntCore.init_state obj xs k m in
@@ -1451,7 +1477,7 @@ let minimize_transpose print_model print_nogood solver obj xs k =
   let _ = B.linear_le solver At.at_True (Array.append [|-1, obj_transpose|] ts) (- lb * (Array.length xs)) in
   solve_minimize !Opts.limits  print_model print_nogood solver (obj_transpose, None) []
 
-let minimize_linear print_model print_nogood solver obj ts k =
+let minimize_linear print_model print_nogood get_ivar_name solver obj ts k =
   if !Opts.core_opt then
     (* Solve using unsat cores. *)
     let xs = Array.map (fun (c, x) ->
@@ -1459,7 +1485,7 @@ let minimize_linear print_model print_nogood solver obj ts k =
         c, x
       else
         -c, Sol.intvar_neg x) ts in
-    minimize_uc print_model print_nogood solver obj xs k
+    minimize_uc print_model print_nogood get_ivar_name solver obj xs k
   else
     solve_minimize !Opts.limits print_model print_nogood solver (obj, None) []
     (*
@@ -1604,7 +1630,7 @@ let main () =
           | Simp.Iv_lin _ ->
             let xs, k = collect_linterms idefs env obj in
             (* let xs = Array.map (fun (c, x) -> c, env.ivars.(x)) ts in *)
-            minimize_linear print_model print_nogood solver env.ivars.(obj) xs k
+            minimize_linear print_model print_nogood (ivar_name problem env) solver env.ivars.(obj) xs k
           | _ ->
             solve_minimize !Opts.limits print_model print_nogood solver (env.ivars.(obj), None) []
         in
@@ -1619,7 +1645,7 @@ let main () =
           | Simp.Iv_lin _ ->
             (* let xs = Array.map (fun (c, x) -> -c, env.ivars.(x)) ts in *)
             let xs, k = collect_linterms idefs env obj in
-            minimize_linear print_model print_nogood solver (Sol.intvar_neg env.ivars.(obj))
+            minimize_linear print_model print_nogood (ivar_name problem env) solver (Sol.intvar_neg env.ivars.(obj))
               (Array.map (fun (c, x) -> (-c, x)) xs) (-k)
           | _ ->
             solve_minimize !Opts.limits print_model print_nogood solver ((Sol.intvar_neg env.ivars.(obj)), None) []

@@ -1,7 +1,7 @@
 (* Recursive-descent parser for FlatZinc. *)
 open Token
 module S = Stream
-module Lex = Lexer
+module Lex = FznLexer
 module M = Problem
 
 exception Tok_error of Token.t
