@@ -1186,7 +1186,7 @@ end = struct
       begin
         Format.fprintf Format.err_formatter
           "%% VAR: %s = " (config.ivar_name x) ;
-        Util.print_list Format.pp_print_string ~pre:"" ~post:"@." ~sep:" + " Format.err_formatter (List.map config.ivar_name vars)
+        Util.print_list Format.pp_print_string ~pre:"" ~post:"" ~sep:"+" Format.err_formatter (List.map config.ivar_name vars)
       end
 
   let apply_core config solver state (term, vars) =
