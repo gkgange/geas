@@ -125,10 +125,12 @@ let post_constraint solver env ident exprs anns =
     (Format.fprintf Format.err_formatter "Error: type mismatch in '%s'.@." ident ;
         false)
   | Not_found ->
-    (* raise (Unknown_constraint ident) *)
+     raise (Unknown_constraint ident)
+       (*
     (Format.fprintf Format.err_formatter "Warning: Ignoring unknown constraint '%s'.@." ident ;
      Registry.register ident (fun _ _ _ -> true) ;
         true)
+        *)
 
 let rel_fun = function
   | Simp.Ile -> Sol.ivar_le
