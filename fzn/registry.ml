@@ -821,13 +821,19 @@ let initialize () =
      "fzn_cumulative_var", cumulative_var ;
      "fzn_disjunctive", disjunctive ;
      "fzn_global_cardinality", global_card ;
-     (* "fzn_table_int", table_int ; *)
+     "geas_all_different_int", all_different_int ;
+     "geas_all_different_except_0", all_different_except_0 ;
+     "geas_cumulative", cumulative ;
+     "geas_cumulative_var", cumulative_var ;
+     "geas_disjunctive", disjunctive ;
+     "geas_global_cardinality", global_card ;
      "value_precede_int", precede_int ;
      "geas_precede_chain", precede_chain_int ;
      "geas_value_precede_chain", value_precede_chain ;
       ] in
   let raw_handlers = [
-     "fzn_table_int", table_int
+     "fzn_table_int", table_int ;
+     "geas_table_int", table_int 
   ] in
   List.iter (fun (id, handler) ->
              register id handler) handlers ;
