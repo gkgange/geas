@@ -168,7 +168,10 @@ void pop_level(solver_data* s) {
 void check_at_fixpoint(solver_data* s) {
   assert(s->pred_queue.empty());
   assert(s->wake_queue.size() == 0);
-  assert(s->prop_queue.empty());  
+  // assert(s->prop_queue.empty());  
+  assert(!s->queue_has_prop);
+  for(int p = 0; p < PRIO_LEVELS; ++p)
+    assert(s->prop_queue[p].empty());  
 }
 
 void bt_to_level(solver_data* s, unsigned int l) {

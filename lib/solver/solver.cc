@@ -36,7 +36,7 @@ options default_options = {
   1.05, // double restart_growthrate;
 
   1,     // one_watch
-  1,     // global_diff
+  0,     // global_diff
 
 //  200, // eager_threshold
    10, // eager_threshold
@@ -155,6 +155,7 @@ solver_data::solver_data(const options& _opts)
       active_prop(nullptr),
       last_branch(default_brancher(this)), 
       pred_heap(act_cmp { infer.pred_act }),
+      queue_has_prop(0),
       // Assumption handling
       assump_end(0),
       init_end(0), init_saved(0),
@@ -1006,10 +1007,21 @@ void prop_cleanup(solver_data& s) {
   }
   s.wake_queue.clear();
 
-  while(!s.prop_queue.empty()) {
-    propagator* p = s.prop_queue._pop();
-    p->cleanup();
+  uint32_t nonempty_queues(s.queue_has_prop);
+  while(nonempty_queues) {
+    unsigned prio(__builtin_ctz(nonempty_queues));
+    nonempty_queues &= nonempty_queues-1;
+
+    auto& Q(s.prop_queue[prio]);
+    while(!Q.empty()) {
+      propagator* p = Q._pop();
+      p->cleanup();
+    }
   }
+  for(int p = 0; p < PRIO_LEVELS; ++p)
+    assert(s.prop_queue[p].empty());
+  s.queue_has_prop = 0;
+
   // s.active_prop = nullptr;
   clear_reset_flags(s);
 }
@@ -1048,45 +1060,50 @@ prop_restart:
   s.wake_queue.clear();
 
   // Process enqueued propagators
-  while(!s.prop_queue.empty()) {
-    propagator* p = s.prop_queue._pop();
+  while(s.queue_has_prop) {
+    unsigned prio(__builtin_ctz(s.queue_has_prop));
+    auto& Q(s.prop_queue[prio]);
+    while(!Q.empty()) {
+      propagator* p = Q._pop();
 #ifdef PROOF_LOG
-    s.log.active_constraint = p->cons_id;
+      s.log.active_constraint = p->cons_id;
 #endif
-    s.active_prop = (void*) p;
+      s.active_prop = (void*) p;
 #ifdef TRACK_EXEC_COUNT
-    p->exec_count++;
+      p->exec_count++;
 #endif
-    if(!p->propagate(s.infer.confl)) {
+      if(!p->propagate(s.infer.confl)) {
 #ifdef LOG_PROP
-      cerr << "[>Done-]" << endl;
+        cerr << "[>Done-]" << endl;
 #endif
 #ifdef CHECK_STATE
-      assert(decision_level(s) == 0 || confl_is_current(&s, s.infer.confl));
+        assert(decision_level(s) == 0 || confl_is_current(&s, s.infer.confl));
 #endif
 
-      p->cleanup();
-      prop_cleanup(s);
+        p->cleanup();
+        prop_cleanup(s);
 #ifdef CHECK_EXPLNS
-      assert(check_confl(&s, p, s.infer.confl));
+        assert(check_confl(&s, p, s.infer.confl));
 #endif
-      s.active_prop = nullptr;
+        s.active_prop = nullptr;
 #ifdef CHECK_STATE
-  check_at_fixpoint(&s);
+    check_at_fixpoint(&s);
 #endif
-      return false; 
-    }
+        return false; 
+      }
 #ifdef LOG_PROP
-      cerr << "[>Done+]" << endl;
+        cerr << "[>Done+]" << endl;
 #endif
-    p->cleanup();
+      p->cleanup();
 
-    // If one or more predicates were updated,
-    // jump back to 
-    if(!s.pred_queue.empty()) {
-      s.active_prop = nullptr;
-      goto prop_restart;
+      // If one or more predicates were updated,
+      // jump back to 
+      if(!s.pred_queue.empty()) {
+        s.active_prop = nullptr;
+        goto prop_restart;
+      }
     }
+    s.queue_has_prop &= ~(1<<prio);
   }
   s.active_prop = nullptr;
   /*  

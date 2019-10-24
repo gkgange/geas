@@ -47,6 +47,7 @@ class solver_data {
     unsigned branch : 1;
   };
 public:
+
   solver_data(const options& _opts);
   ~solver_data(void);
 
@@ -78,7 +79,8 @@ public:
   vec<bool> wake_queued;
   vec<pval_t> wake_vals;
   
-  Queue<propagator*> prop_queue;
+  Queue<propagator*> prop_queue[PRIO_LEVELS];
+  uint32_t queue_has_prop; // Which priority levels are nonempty
 
   vec<propagator*> propagators;
   vec<brancher*> branchers;

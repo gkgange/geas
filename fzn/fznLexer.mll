@@ -20,6 +20,7 @@ let alext = alnum | ':' | '_' | '''
 let sym = lower alext*
 let ident = (alpha | '_') (alnum | '_')*
 let comment = '%' [^ '\n']* '\n'
+let strchar = [^ '"' '\\'] | ('\\' _)
 
 rule token = parse
     [' ' '\t'] { token lexbuf }
@@ -29,6 +30,7 @@ rule token = parse
   | '-'? digit+ '.' digit+ (['e' 'E'] digit+)? as lxm
       { Float (float_of_string lxm) }
   | ident as lxm  { get_ident lxm }
+  | '"' (strchar* as s) '"' { Str s }
   | "=" { Kwd Eq }
   (*
   | "<=" { Kwd Le }
