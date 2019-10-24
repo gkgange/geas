@@ -40,7 +40,7 @@ let core_selection = ref Violation
 let core_reformulation = ref ReformEach
 
 let one_watch = ref true
-let global_diff = ref true
+let global_diff = ref false
 
 let check = ref false
 
@@ -119,7 +119,7 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
      (
       "--global-diff",
       Arg.Bool (fun b -> global_diff := b),
-      " : use global difference-logic propagator to handle (reified) inequalities (default: true)."
+      " : use global difference-logic propagator to handle (reified) inequalities (default: false)."
      ) ;
      (
       "--core-opt",

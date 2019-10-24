@@ -25,7 +25,7 @@ public:
   // Return the operator implementations
 //  virtual prop_t get(void) = 0;
 
-  propagator(solver_data* _s);
+  propagator(solver_data* _s, char priority = PRIO_HIGH);
 
   virtual ~propagator(void) { }
 
@@ -81,6 +81,7 @@ public:
 
   void queue_prop(void);
 
+  unsigned char priority;
   bool is_idempotent;
   bool is_queued;
 // #ifdef PROOF_LOG

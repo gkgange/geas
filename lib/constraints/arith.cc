@@ -10,7 +10,7 @@
 #include <geas/utils/interval.h>
 
 #include <geas/constraints/difflogic.h>
-// #define USE_DIFFLOGIC
+#define USE_DIFFLOGIC
 
 // using max = std::max;
 // using min = std::min;

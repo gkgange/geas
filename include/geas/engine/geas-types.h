@@ -9,6 +9,8 @@ namespace geas {
 // Exception if posting a propagator fails.
 class RootFail { };
 
+enum Priority { PRIO_HIGH = 0, PRIO_MED = 1, PRIO_LOW = 2, PRIO_LAST = 3, PRIO_LEVELS = 4 };
+
 class lbool {
   lbool(int _x) : x(_x) { }
 public:

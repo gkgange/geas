@@ -21,7 +21,7 @@ public:
   typedef unsigned int cst_id;
 
   diff_manager(solver_data* s)
-    : propagator(s), finished(0), finished_sz(0),
+    : propagator(s, PRIO_HIGH), finished(0), finished_sz(0),
       fqueue(cmp_fwd_dist { this }),
       rqueue(cmp_rev_dist { this }) {
      

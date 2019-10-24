@@ -3,11 +3,12 @@
 
 namespace geas {
 
-propagator::propagator(solver_data* _s)
+propagator::propagator(solver_data* _s, char _priority)
     : is_queued(false), prop_id(_s->propagators.size()), s(_s)
 #ifdef TRACK_EXEC_COUNT
     , exec_count(0)
 #endif
+    , priority(_priority)
     {
 //#ifdef PROOF_LOG
     cons_id = s->log.scope_constraint;
@@ -18,7 +19,8 @@ propagator::propagator(solver_data* _s)
 
 void propagator::queue_prop(void) {
   if(!is_queued) {
-    s->prop_queue.insert(this);
+    s->prop_queue[priority].insert(this);
+    s->queue_has_prop |= 1<<priority;
     is_queued = true;
   }
 }
