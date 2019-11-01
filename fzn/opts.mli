@@ -39,6 +39,7 @@ val obj_probe_limit : int option ref
 val core_opt : bool ref
 val core_ratio : float ref
 val core_type : core_type ref
+val core_factor_coeff : bool ref
 
 val core_harden : bool ref
 val core_selection : core_select ref

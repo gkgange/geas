@@ -3,6 +3,8 @@ exception Not_yet
 
 val div_floor : int -> int -> int
 val div_ceil : int -> int -> int
+val gcd_list : int list -> int
+val gcd : int -> int -> int
 
 module HashSet :
 sig
@@ -51,3 +53,5 @@ val array_foldi : (int -> 'r -> 'a -> 'r) -> 'r -> 'a array -> 'r
 val array_fold2 : ('r -> 'a -> 'b -> 'r) -> 'r -> 'a array -> 'b array -> 'r
 
 val array_combine : 'a array -> 'b array -> ('a * 'b) array
+
+val array_fold1 : ('a -> 'a -> 'a) -> 'a array -> 'a

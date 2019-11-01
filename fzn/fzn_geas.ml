@@ -596,7 +596,25 @@ let update_thresholds thresholds bounds =
       H.remove thresholds x
     else
       H.replace thresholds x st' ;
-    at) bounds in
+    (1, at)) bounds in
+  delta, atoms
+
+let update_thresholds_unfactor thresholds bounds =
+  (* let diff = ref max_int in *)
+  let delta = Array.fold_left (fun d (x, b) ->
+    let st = H.find thresholds x in
+    assert (b > st.lb) ;
+    (* diff := min (b - st.lb) !diff ; *)
+    min d st.residual) max_int bounds in
+  let atoms = Array.map (fun (x, _) ->
+    let st = H.find thresholds x in
+    let at = Sol.ivar_gt x st.lb in
+    let st' = adjust_ovar_state st delta in
+    if st'.lb = Sol.ivar_ub x then
+      H.remove thresholds x
+    else
+      H.replace thresholds x st' ;
+    (1, at)) bounds in
   delta, atoms
 
 let log_thresholds thresholds =
@@ -710,7 +728,8 @@ let process_core solver pred_map thresholds core =
         (fun fmt (x, b) -> Format.fprintf fmt "x%d >= %d" (Sol.ivar_pred x |> Int32.to_int) b) Format.err_formatter bounds in
         *)
       let delta, atoms = update_thresholds thresholds bounds in
-      let _ = post_bool_sum_geq solver p atoms (-1) in
+      (* let _ = post_bool_sum_geq solver p atoms (-1) in *)
+      let _ = B.bool_linear_ge solver (At.at_True) p atoms (-1) in
       let _ = Sol.post_clause solver core in
       (* Format.fprintf Format.err_formatter "%% Adding penalty var: x%d with coefficient %d.@."
         (Sol.ivar_pred p |> Int32.to_int) delta ; *)
@@ -730,7 +749,7 @@ let trim_core solver pred_map thresholds core =
     let _ = H.replace thresholds x { coeff = st.coeff ; lb = b ; residual = st.coeff } in
     (* let okay = Sol.post_atom solver core.(0) in 
     assert okay ; *)
-    cost, core
+    cost, [| 1, core.(0) |]
   else
     let bounds = Array.map (lb_of_atom pred_map) core in
     let delta, atoms = update_thresholds thresholds bounds in
@@ -741,9 +760,11 @@ let apply_cores print_penalty solver pred_map thresholds deferred_cores =
   List.iter (fun (delta, c) ->
     if Array.length c > 1 then
       begin
-        let p = Sol.new_intvar solver 0 (Array.length c - 1) in
+        let low = Util.array_fold1 (min) (Array.map fst c) in
+        let high = Util.array_fold1 (+) (Array.map fst c) in
+        let p = Sol.new_intvar solver 0 (high - low) in
         print_penalty Format.err_formatter p c ;
-        let _ = post_bool_sum_geq solver p c (-1) in
+        let _ = B.bool_linear_ge solver (At.at_True) p c (-low) in
         H.add pred_map (Sol.ivar_pred p) p ;
         H.add thresholds p { coeff = delta ; lb = 0; residual = delta; }
       end
@@ -751,7 +772,7 @@ let apply_cores print_penalty solver pred_map thresholds deferred_cores =
 
 let core_violations m core =
   let (delta, c) = core in
-  Array.fold_left (fun s at -> s + if Sol.atom_value m at then 1 else 0) 0 c
+  Array.fold_left (fun s (_, at) -> s + if Sol.atom_value m at then 1 else 0) 0 c
 
 (* What is the violation from these cores not yet priced into the lower bound? *)
 let core_excess m core =
@@ -1011,7 +1032,7 @@ end = struct
     lb : int ;
   }
   type otable = (Sol.intvar, oterm) H.t
-  type delayed_core = oterm * (Sol.intvar list)
+  type delayed_core = oterm * ((int * Sol.intvar) list)
 
   type configuration = {
     print_model : Sol.model -> unit ;
@@ -1094,11 +1115,11 @@ end = struct
         let st = H.find state.thresholds x in
         min_delta := min (b - st.lb) !min_delta ;
         min_coeff := min st.coeff !min_coeff ;
-        s + st.lb, x :: xs) (0, []) core in
+        s + st.lb, (1, x) :: xs) (0, []) core in
     (* Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ; *)
     state.obj_lb <- state.obj_lb + !min_coeff * !min_delta ;
     begin
-      List.iter (fun x ->
+      List.iter (fun (_, x) ->
           let st = H.find state.thresholds x in
           if st.coeff = !min_coeff then
             H.remove state.thresholds x
@@ -1108,6 +1129,25 @@ end = struct
       let d_core = { lb = s + !min_delta ; coeff = !min_coeff }, xs in
       state.pending <- d_core :: state.pending
     end
+  
+  (* Instead of taking the min coeff, we need the gcd. *)
+  let isolate_core state core =
+    (* let max_coeff = ref 0 in *)
+    let s, min_delta, xs_pre = Array.fold_left (fun (s, min_delta, xs) at ->
+        let (x, b) = lb_of_atom state.pred_map at in
+        let st = H.find state.thresholds x in
+        H.remove state.thresholds x ;
+        (* max_coeff := max st.coeff !max_coeff ; *)
+        let min_delta' = min (st.coeff * (b - st.lb)) min_delta in
+        s + st.coeff * st.lb, min_delta', (st.coeff, x) :: xs) (0, max_int, []) core in
+    let gcd_coeff = Util.gcd_list (List.map fst xs_pre) in
+    (* Format.fprintf Format.err_formatter "%% gcd: %d, max: %d@." gcd_coeff !max_coeff ; *)
+    let xs = List.map (fun (c, x) -> c / gcd_coeff, x) xs_pre in
+    (* Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ; *)
+    state.obj_lb <- state.obj_lb + min_delta ;
+    let d_core = { lb = (s + min_delta) / gcd_coeff ; coeff = gcd_coeff }, xs in
+    state.pending <- d_core :: state.pending
+
 
   (* Search for a solution to the current subproblem *)
   let try_state solver state limits =
@@ -1186,26 +1226,26 @@ end = struct
       begin
         Format.fprintf Format.err_formatter
           "%% VAR: %s = " (config.ivar_name x) ;
-        Util.print_list Format.pp_print_string ~pre:"" ~post:"" ~sep:"+" Format.err_formatter (List.map config.ivar_name vars)
+        Util.print_list Format.pp_print_string ~pre:"" ~post:"@." ~sep:"+" Format.err_formatter (List.map (fun (c, x) -> Format.sprintf "%d %s" c (config.ivar_name x)) vars)
       end
 
-  let apply_core config solver state (term, vars) =
-    match vars with
-    | [x] ->
+  let apply_core config solver state (term, ts) =
+    match ts with
+    | [(c, x)] ->
       begin
         let lb' = probe_lb solver state x term.lb in
-        state.obj_lb <- state.obj_lb + term.coeff * (lb' - term.lb) ;
-        H.add state.thresholds x { term with lb = lb' }
+        state.obj_lb <- state.obj_lb + c * term.coeff * (lb' - term.lb) ;
+        H.add state.thresholds x { lb = lb' ; coeff = term.coeff * c }
       end
     | _ ->
       begin
         let lb = term.lb in
         let ub = lb + (state.obj_ub - state.obj_lb) / term.coeff in
-        let ts = List.map (fun x -> 1, x) vars |> Array.of_list in
+        (* let ts = List.map (fun x -> 1, x) vars |> Array.of_list in *)
         (* Create the new penalty term *)
         let p = Sol.new_intvar solver lb ub in
-        let _ = print_penalty config p vars in
-        let _ = B.linear_le solver At.at_True (Array.append [|-1, p|] ts) 0 in
+        let _ = print_penalty config p ts in
+        let _ = B.linear_le solver At.at_True (Array.of_list ((-1, p) :: ts)) 0 in
         H.add state.pred_map (Sol.ivar_pred p) p ;
         H.add state.thresholds p term ;
       end
@@ -1219,7 +1259,7 @@ end = struct
     ()
     
   let core_violation m (term, vars) =
-    let cost = List.fold_left (fun d x -> d + Sol.int_value m x) 0 vars in
+    let cost = List.fold_left (fun d (c, x) -> d + c * (Sol.int_value m x)) 0 vars in
     cost - term.lb
 
   let split_cores state m =
@@ -1233,6 +1273,8 @@ end = struct
 
 
   let rec solve config solver state =
+    (* Format.fprintf Format.err_formatter "%% [%d | %d].@." state.obj_lb state.obj_ub ; *)
+    assert (state.obj_lb <= state.obj_ub) ;
     if state.obj_lb = state.obj_ub then
       Opt state.incumbent
     else
@@ -1261,7 +1303,12 @@ end = struct
                 else
                   *)
                   core in
-              factor_core state core' ;
+              let _ =
+                if !Opts.core_factor_coeff then
+                  factor_core state core'
+                else
+                  isolate_core state core'
+              in
               let _ = if !Opts.verbosity > 1 then
                 Format.fprintf Format.err_formatter "%%%% Found core of size %d, new lb: %d@." (Array.length core) state.obj_lb ;
                 if !Opts.verbosity > 2 then
@@ -1626,7 +1673,9 @@ let main () =
       if !Opts.verbosity > 2 then
         (fun fmt x core ->
           Format.fprintf fmt "%% VAR: %s = " (get_ivar_name x) ; 
-          Util.print_array pp_atom ~pre:"" ~post:"@." ~sep:" + " fmt core)
+          Util.print_array (fun fmt (c, at) ->
+            Format.fprintf fmt "%d " c ;
+            pp_atom fmt at) ~pre:"" ~post:"@." ~sep:" + " fmt core)
       else
         (fun fmt x core -> ())
     in

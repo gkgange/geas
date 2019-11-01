@@ -42,7 +42,8 @@ let core_harden = ref false
 
 let core_selection = ref Violation
 let core_reformulation = ref ReformEach
-let core_type = ref SliceCore
+let core_type = ref IntCore
+let core_factor_coeff = ref true
 
 let one_watch = ref true
 let global_diff = ref false
@@ -148,7 +149,12 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
            | "int" -> IntCore
            | "slice" -> SliceCore
            | s -> failwith (Format.sprintf "ERROR: Unexpected core type \"%s\"" s)),
-       " : choose the type of unsat-core reformulation.") ;
+       " : choose the type of unsat-core reformulation (default: int).") ;
+     (
+      "--factor-coeff",
+      Arg.Bool (fun b -> core_factor_coeff := b),
+      " : whether to factor coefficients during unsat core iterations (default: true)."
+     ) ;
      (
       "--reformulate",
       Arg.Tuple
