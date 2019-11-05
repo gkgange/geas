@@ -599,6 +599,7 @@ let update_thresholds thresholds bounds =
     (1, at)) bounds in
   delta, atoms
 
+(*
 let update_thresholds_unfactor thresholds bounds =
   (* let diff = ref max_int in *)
   let delta = Array.fold_left (fun d (x, b) ->
@@ -616,6 +617,37 @@ let update_thresholds_unfactor thresholds bounds =
       H.replace thresholds x st' ;
     (1, at)) bounds in
   delta, atoms
+  *)
+
+(* Look at the residuals to decide whether to factor or 
+ * split. *)
+(*
+let update_thresholds_adapt thresholds bounds =
+  (* let diff = ref max_int in *)
+  let core_res = Array.map (fun (x, _) ->
+    let st = H.find thresholds x in st.residual) bounds
+  in
+  let delta = Util.array_fold1 min core_res in
+  let sel_max = Array.fold_left (fun c b ->
+    if b > 2*delta then
+      c
+    else
+      max c b) core_res in
+  let coeff = if delta = sel_max then delta else 1 in
+  (* Anything with coefficient 2*delta gets added directly,
+   * anything else gets factored. *)
+  let atoms = Array.map (fun (x, b) ->
+    let st = H.find thresholds x in
+    let at = Sol.ivar_gt x st.lb in
+    let x_delta = if st.residual > sel_max then sel_max else st.residual in
+    let st' = adjust_ovar_state st x_delta in
+    if st'.lb = Sol.ivar_ub x then
+      H.remove thresholds x
+    else
+      H.replace thresholds x st' ;
+    (coeff, at)) bounds in
+  coeff, delta, atoms
+  *)
 
 let log_thresholds thresholds =
   let fmt = Format.err_formatter in
@@ -719,7 +751,7 @@ let process_core solver pred_map thresholds core =
   else
     begin
       (* Create penalty var *)
-      let p = Sol.new_intvar solver 0 (Array.length core - 1) in
+      let p = Sol.new_intvar solver 1 (Array.length core) in
       (* Relate penalty to core *)
       (* Now update thresholds *)
       let bounds = Array.map (lb_of_atom pred_map) core in    
@@ -729,12 +761,12 @@ let process_core solver pred_map thresholds core =
         *)
       let delta, atoms = update_thresholds thresholds bounds in
       (* let _ = post_bool_sum_geq solver p atoms (-1) in *)
-      let _ = B.bool_linear_ge solver (At.at_True) p atoms (-1) in
+      let _ = B.bool_linear_ge solver (At.at_True) p atoms 0 in
       let _ = Sol.post_clause solver core in
       (* Format.fprintf Format.err_formatter "%% Adding penalty var: x%d with coefficient %d.@."
         (Sol.ivar_pred p |> Int32.to_int) delta ; *)
       H.add pred_map (Sol.ivar_pred p) p ;
-      H.add thresholds p { coeff = delta ; lb = 0 ; residual = delta ; } ;
+      H.add thresholds p { coeff = delta ; lb = 1 ; residual = delta ; } ;
       (* ) log_thresholds thresholds ; ( *)
       delta
     end
@@ -762,11 +794,11 @@ let apply_cores print_penalty solver pred_map thresholds deferred_cores =
       begin
         let low = Util.array_fold1 (min) (Array.map fst c) in
         let high = Util.array_fold1 (+) (Array.map fst c) in
-        let p = Sol.new_intvar solver 0 (high - low) in
+        let p = Sol.new_intvar solver low high in
         print_penalty Format.err_formatter p c ;
         let _ = B.bool_linear_ge solver (At.at_True) p c (-low) in
         H.add pred_map (Sol.ivar_pred p) p ;
-        H.add thresholds p { coeff = delta ; lb = 0; residual = delta; }
+        H.add thresholds p { coeff = delta ; lb = low; residual = delta; }
       end
     ) deferred_cores
 
@@ -1148,6 +1180,38 @@ end = struct
     let d_core = { lb = (s + min_delta) / gcd_coeff ; coeff = gcd_coeff }, xs in
     state.pending <- d_core :: state.pending
 
+  (* Use the domain and coefficients to decide whether to factor or isolate. *)
+  let factor_or_isolate_core state core =
+    (* let max_coeff = ref 0 in *)
+    let s, min_delta, xs_pre = Array.fold_left (fun (s, min_delta, xs) at ->
+        let (x, b) = lb_of_atom state.pred_map at in
+        let st = H.find state.thresholds x in
+        (* H.remove state.thresholds x ; *)
+        (* max_coeff := max st.coeff !max_coeff ; *)
+        let min_delta' = min (st.coeff * (b - st.lb)) min_delta in
+        s + st.coeff * st.lb, min_delta', (st.coeff, x) :: xs) (0, max_int, []) core in
+    let unfactor_max = List.map fst xs_pre |> List.fold_left (fun s c ->
+      if c > 2 * min_delta then s else max s c) min_delta in
+    let _ = Format.fprintf Format.err_formatter "%% Min delta: %d, unfactor_coeff: %d@." min_delta unfactor_max in
+    let gcd_coeff = List.map fst xs_pre |> List.fold_left (fun s c -> Util.gcd s c) unfactor_max in
+    (* Format.fprintf Format.err_formatter "%% gcd: %d, max: %d@." gcd_coeff !max_coeff ; *)
+    (* *)
+    let xs = List.map (fun (c, x) ->
+      let st = H.find state.thresholds x in
+      let c' = 
+        if c > unfactor_max then
+          let _ = H.replace state.thresholds x { lb = st.lb ; coeff = st.coeff - unfactor_max } in
+          unfactor_max
+        else
+          let _ = H.remove state.thresholds x in
+          c
+      in
+      (c' / gcd_coeff, x)  
+     ) xs_pre in
+    (* Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ; *)
+    state.obj_lb <- state.obj_lb + min_delta ;
+    let d_core = { lb = (s + min_delta)/gcd_coeff ; coeff = gcd_coeff }, xs in
+    state.pending <- d_core :: state.pending
 
   (* Search for a solution to the current subproblem *)
   let try_state solver state limits =
@@ -1307,7 +1371,8 @@ end = struct
                 if !Opts.core_factor_coeff then
                   factor_core state core'
                 else
-                  isolate_core state core'
+                  (* isolate_core state core' *)
+                  factor_or_isolate_core state core'
               in
               let _ = if !Opts.verbosity > 1 then
                 Format.fprintf Format.err_formatter "%%%% Found core of size %d, new lb: %d@." (Array.length core) state.obj_lb ;
