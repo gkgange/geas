@@ -1192,7 +1192,7 @@ end = struct
         s + st.coeff * st.lb, min_delta', (st.coeff, x) :: xs) (0, max_int, []) core in
     let unfactor_max = List.map fst xs_pre |> List.fold_left (fun s c ->
       if c > 2 * min_delta then s else max s c) min_delta in
-    let _ = Format.fprintf Format.err_formatter "%% Min delta: %d, unfactor_coeff: %d@." min_delta unfactor_max in
+    (* let _ = Format.fprintf Format.err_formatter "%% Min delta: %d, unfactor_coeff: %d@." min_delta unfactor_max in *)
     let gcd_coeff = List.map fst xs_pre |> List.fold_left (fun s c -> Util.gcd s c) unfactor_max in
     (* Format.fprintf Format.err_formatter "%% gcd: %d, max: %d@." gcd_coeff !max_coeff ; *)
     (* *)
@@ -1483,10 +1483,12 @@ let set_polarity solver env pol_info =
   ) pol_info.Pol.ivars
 
 let get_core_limits limits =
-  let core_frac = !Opts.core_ratio in  
-  let tmax = if limits.Sol.max_time > 0.0 then core_frac *. limits.Sol.max_time else 0.0 in
-  let cmax = if limits.Sol.max_conflicts > 0 then int_of_float (core_frac *. (float_of_int limits.Sol.max_conflicts)) else 0 in
-  { Sol.max_time = tmax ; Sol.max_conflicts = cmax }
+  match !Opts.core_ratio with
+  | None -> limits
+  | Some core_frac ->
+    let tmax = if limits.Sol.max_time > 0.0 then core_frac *. limits.Sol.max_time else 0.0 in
+    let cmax = if limits.Sol.max_conflicts > 0 then int_of_float (core_frac *. (float_of_int limits.Sol.max_conflicts)) else 0 in
+    { Sol.max_time = tmax ; Sol.max_conflicts = cmax }
 
 let rebuild_objective solver thresholds lb ub =
   let ts = ref [] in

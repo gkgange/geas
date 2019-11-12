@@ -36,7 +36,7 @@ let limits = ref (Solver.unlimited ())
 
 let obj_probe_limit = ref None
 let core_opt = ref false
-let core_ratio = ref 0.2
+let core_ratio = ref None
 
 let core_harden = ref false
 
@@ -134,7 +134,7 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
      ) ;
      (
       "--core-ratio",
-      Arg.Float (fun r -> core_ratio := r),
+      Arg.Float (fun r -> core_ratio := Some r),
       " : how much of the resource budget to spend on core-driven optimization."
      ) ;
      (
