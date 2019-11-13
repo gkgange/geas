@@ -504,6 +504,7 @@ let solve_minimize overall_limits print_model print_nogood solver obj assumps =
   in
   let rec aux model =
     let obj_val = eval_obj model obj in
+    (* let _ = Format.fprintf Format.err_formatter "%% z = %d, f(xs) = %d@." (Sol.int_value model (fst obj)) obj_val in *)
     (* let _ = Format.fprintf fmt "%% Candidate: %d, %d@." obj_val (Sol.int_value model (fst obj)) in *)
     if not (Sol.post_atom solver (obj_lt obj obj_val)) then
       (begin
@@ -796,7 +797,7 @@ let apply_cores print_penalty solver pred_map thresholds deferred_cores =
         let high = Util.array_fold1 (+) (Array.map fst c) in
         let p = Sol.new_intvar solver low high in
         print_penalty Format.err_formatter p c ;
-        let _ = B.bool_linear_ge solver (At.at_True) p c (-low) in
+        let _ = B.bool_linear_ge solver (At.at_True) p c 0 (* (-low) *) in
         H.add pred_map (Sol.ivar_pred p) p ;
         H.add thresholds p { coeff = delta ; lb = low; residual = delta; }
       end
@@ -1117,9 +1118,12 @@ end = struct
 
   let tighten_bounds solver state =
     let gap = state.obj_ub - state.obj_lb in
+    (* let _ = Format.fprintf Format.err_formatter "%% lb: %d, ub: %d, gap: %d@." state.obj_lb state.obj_ub gap in *)
     H.fold (fun x st r ->
       r &&
       let x_ub = st.lb + (gap / st.coeff) in
+      (* let _ = Format.fprintf Format.err_formatter "%% [var lb: %d, st.lb: %d, ub: %d, new_ub: %d@."
+        (Sol.ivar_lb x) st.lb (Sol.ivar_ub x) x_ub in *)
       Sol.post_atom solver (Sol.ivar_le x x_ub)) state.thresholds true
 
   let update_incumbent (config : configuration) solver state m =
@@ -1298,7 +1302,7 @@ end = struct
     | [(c, x)] ->
       begin
         let lb' = probe_lb solver state x term.lb in
-        state.obj_lb <- state.obj_lb + c * term.coeff * (lb' - term.lb) ;
+        (* state.obj_lb <- state.obj_lb + c * term.coeff * (lb' - term.lb) ; *)
         H.add state.thresholds x { lb = lb' ; coeff = term.coeff * c }
       end
     | _ ->
