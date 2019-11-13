@@ -428,6 +428,7 @@ let increase_ivar obj_val ivar solver model =
 
 let relative_limits solver limits =
   let s = Sol.get_statistics solver in
+  (* let _ = Format.fprintf Format.err_formatter "Time: %f@, max %f." s.Sol.time limits.Sol.max_time in *)
   { Sol.max_time =
       if limits.Sol.max_time > 0. then
         max 0.001 (limits.Sol.max_time -. s.Sol.time)
@@ -870,6 +871,7 @@ let try_thresholds_list solver thresholds =
 
 let time_is_exceeded solver limits =
   let s = Sol.get_statistics solver in
+  let _ = Format.fprintf Format.err_formatter "%% time: %f, max %f@." s.Sol.time limits.Sol.max_time in
   limits.Sol.max_time > 0. && s.Sol.time > limits.Sol.max_time
 
 let try_thresholds_upto solver thresholds min_coeff limits =
@@ -1231,7 +1233,7 @@ end = struct
       else if (not okay) then
         UNSAT (Sol.get_conflict solver)
       else
-        match Sol.solve solver limits with
+        match Sol.solve solver (relative_limits solver limits) with
         | Sol.SAT -> SAT (Sol.get_model solver)
         | Sol.UNSAT -> UNSAT (Sol.get_conflict solver)
         | Sol.UNKNOWN -> UNKNOWN
@@ -1346,7 +1348,7 @@ end = struct
     if state.obj_lb = state.obj_ub then
       Opt state.incumbent
     else
-      match try_state solver state (relative_limits solver config.limits) with
+      match try_state solver state config.limits (* (relative_limits solver config.limits) *) with
       | SAT m ->
          begin
            (* Format.fprintf Format.err_formatter "%% Found model.@." ; *)
