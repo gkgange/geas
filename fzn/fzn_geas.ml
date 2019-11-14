@@ -785,16 +785,27 @@ let apply_cores print_penalty solver pred_map thresholds deferred_cores =
       end
     ) deferred_cores
 
+let core_excess m core =
+  let (lb, coeff, c) = core in
+  let cost = Array.fold_left
+    (fun s (c, at) -> s + c * (if Sol.atom_value m at then 1 else 0)) 0 c in
+  cost - lb
+
+(*
 let core_violations m core =
   let (lb, delta, c) = core in
   Array.fold_left (fun s (_, at) -> s + if Sol.atom_value m at then 1 else 0) 0 c
+  *)
 
 (* What is the violation from these cores not yet priced into the lower bound? *)
+(*
 let core_excess m core =
   let (lb, coeff, c) = core in
   let vio = core_violations m core in
   (* assert (vio > 0) ; *)
   coeff * vio - lb
+  *)
+
 let cores_excess m cores = List.fold_left (fun e c -> e + core_excess m c) 0 cores
 
 let core_coeff (_, c, _) = c
@@ -803,17 +814,17 @@ let core_cost (lb, _, _) = lb
 (* FIXME *)
 let core_violation_score mode m =
   match mode with
-  | Opts.Uniform -> (fun c -> if core_violations m c > 1 then 1 else 0)
-  | Opts.Violation -> (fun c -> core_violations m c - 1)
-  | Opts.Weight -> (fun c -> if core_violations m c > 1 then (core_coeff c) else 0)
-  | Opts.WeightViolation -> (fun c -> (core_coeff c) * (core_violations m c - 1))
+  | Opts.Uniform -> (fun c -> if core_excess m c > 0 then 1 else 0)
+  | Opts.Violation -> (fun c -> core_excess m c)
+  | Opts.Weight -> (fun c -> if core_excess m c > 0 then (core_coeff c) else 0)
+  | Opts.WeightViolation -> (fun c -> (core_coeff c) * (core_excess m c))
 
 (* Collect only the set of cores with maximum violation. *)
 let split_cores m cores =
   let score_core = core_violation_score !Opts.core_selection m in
   (* let _ = Format.fprintf Format.err_formatter "%% Pending: %d@." (List.length cores) in *)
   let _ = if !Opts.verbosity > 3 then
-    Util.print_list ~post:"@]]@." Format.pp_print_int Format.err_formatter (List.map (fun c -> core_violations m c) cores) in
+    Util.print_list ~post:"@]]@." Format.pp_print_int Format.err_formatter (List.map (fun c -> core_excess m c) cores) in
   let rec aux cost vio_cores def_cores pending =
     match pending with
     | [] -> (cost, vio_cores, def_cores)
