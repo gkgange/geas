@@ -1300,7 +1300,7 @@ end = struct
     | [(c, x)] ->
       begin
         let lb' = probe_lb solver state x term.lb in
-        (* state.obj_lb <- state.obj_lb + c * term.coeff * (lb' - term.lb) ; *)
+        state.obj_lb <- state.obj_lb + c * term.coeff * (lb' - term.lb) ;
         H.add state.thresholds x { lb = lb' ; coeff = term.coeff * c }
       end
     | _ ->
