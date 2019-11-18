@@ -1185,20 +1185,23 @@ end = struct
   (* Use the domain and coefficients to decide whether to factor or isolate. *)
   let factor_or_isolate_core state core =
     (* let max_coeff = ref 0 in *)
-    let s, min_delta, xs_pre = Array.fold_left (fun (s, min_delta, xs) at ->
+    let min_delta, xs_pre = Array.fold_left (fun (min_delta, xs) at ->
         let (x, b) = lb_of_atom state.pred_map at in
         let st = H.find state.thresholds x in
         (* H.remove state.thresholds x ; *)
         (* max_coeff := max st.coeff !max_coeff ; *)
-        let min_delta' = min (st.coeff * (b - st.lb)) min_delta in
-        s + st.coeff * st.lb, min_delta', (st.coeff, x) :: xs) (0, max_int, []) core in
-    let unfactor_max = List.map fst xs_pre |> List.fold_left (fun s c ->
-      if c > 2 * min_delta then s else max s c) min_delta in
+        let delta = (b - st.lb) in
+        let min_delta' = min (st.coeff * delta) min_delta in
+        min_delta', (st.coeff, delta, x) :: xs) (max_int, []) core in
+    let unfactor_max, unfactor_coeffs = List.map (fun (c, _, _) -> c) xs_pre |> List.fold_left (fun (s, cs) c ->
+      if c > 2 * min_delta then s, cs else max s c, c::cs) (1, []) in
     (* let _ = Format.fprintf Format.err_formatter "%% Min delta: %d, unfactor_coeff: %d@." min_delta unfactor_max in *)
-    let gcd_coeff = List.map fst xs_pre |> List.fold_left (fun s c -> Util.gcd s c) unfactor_max in
-    (* Format.fprintf Format.err_formatter "%% gcd: %d, max: %d@." gcd_coeff !max_coeff ; *)
+    let gcd_coeff = List.fold_left Util.gcd unfactor_max unfactor_coeffs in
+    (* Format.fprintf Format.err_formatter "%% gcd: %d, max: %d@." gcd_coeff !gcd_coeff ; *)
     (* *)
-    let xs = List.map (fun (c, x) ->
+    let s = ref 0 in
+    let dmin = ref max_int in
+    let xs = List.map (fun (c, d, x) ->
       let st = H.find state.thresholds x in
       let c' = 
         if c > unfactor_max then
@@ -1208,11 +1211,13 @@ end = struct
           let _ = H.remove state.thresholds x in
           c
       in
-      (c' / gcd_coeff, x)  
+      s := !s + c' * st.lb ;
+      dmin := min !dmin (c' * d) ;
+      (c' / gcd_coeff, x)
      ) xs_pre in
     (* Format.fprintf Format.err_formatter "%% [%d | %d]@." !min_coeff !min_delta ; *)
-    state.obj_lb <- state.obj_lb + min_delta ;
-    let d_core = { lb = (s + min_delta)/gcd_coeff ; coeff = gcd_coeff }, xs in
+    state.obj_lb <- state.obj_lb + !dmin ;
+    let d_core = { lb = (!s + !dmin)/gcd_coeff ; coeff = gcd_coeff }, xs in
     state.pending <- d_core :: state.pending
 
   (* Search for a solution to the current subproblem *)
@@ -1263,7 +1268,7 @@ end = struct
     in
     let ub = Sol.ivar_ub x in
     let rec aux lb step =
-      (* Format.fprintf Format.err_formatter "%% Probe step: %d@." step ; *)
+      (* Format.fprintf Format.err_formatter "%% Probe step: %d@." step ;  *)
       if lb > ub then
         lb
       else
@@ -1311,6 +1316,10 @@ end = struct
         (* Create the new penalty term *)
         let p = Sol.new_intvar solver lb ub in
         let _ = print_penalty config p ts in
+        (*
+        let _ = if !Opts.verbosity > 3 && term.coeff > 1 then
+          Format.fprintf Format.err_formatter "%% COEFF: %d@." term.coeff in
+          *)
         let _ = B.linear_le solver At.at_True (Array.of_list ((-1, p) :: ts)) 0 in
         H.add state.pred_map (Sol.ivar_pred p) p ;
         H.add state.thresholds p term ;
