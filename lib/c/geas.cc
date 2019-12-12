@@ -146,7 +146,7 @@ void destroy_floatvar(fpvar v) {
   delete get_fpvar(v);
 }
 
-forceinline geas::VarChoice get_varc(var_choice c) {
+static forceinline geas::VarChoice get_varc(var_choice c) {
   switch(c) {
     case VAR_INORDER: return geas::Var_InputOrder;
     case VAR_FIRSTFAIL: return geas::Var_FirstFail;
@@ -157,7 +157,7 @@ forceinline geas::VarChoice get_varc(var_choice c) {
   return geas::Var_Smallest;
 }
 
-forceinline geas::ValChoice get_valc(val_choice c) {
+static forceinline geas::ValChoice get_valc(val_choice c) {
   switch(c) {
     case VAL_MIN: return geas::Val_Min;
     case VAL_MAX: return geas::Val_Max;

@@ -9,7 +9,7 @@ SOLVER	  = ./lib/solver
 CONSTRAINTS = ./lib/constraints
 UTILS     = ./lib/utils
 VARS      = ./lib/vars
-CXXFLAGS    = -I ./include -Wall -Wno-deprecated # -ffloat-store
+CXXFLAGS    = -I ./include -Wall -Wno-deprecated -fno-rtti -fPIC # -ffloat-store
 CXXFLAGS += --std=c++11
 CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS
 CXXFLAGS += $(PROF)
