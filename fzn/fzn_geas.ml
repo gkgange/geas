@@ -1042,7 +1042,47 @@ let rec solve_core_strat print_model print_nogood print_penalty solver obj incum
     end
   end
 
-(* Alternate reinterpretation of core-guided optimisation for integers.
+let solve_with_assumption solver at limits =
+  if not (Sol.assume solver at) then
+    Sol.UNSAT
+  else if time_is_exceeded solver limits then
+    Sol.UNKNOWN
+  else
+    Sol.solve solver limits
+
+
+let solve_with_assumptions solver assumps limits =
+  let rec aux assumps =
+    match assumps with
+    | [] ->
+      Sol.solve solver limits
+    | at :: assumps' ->
+      if not (Sol.assume solver at) then
+        Sol.UNSAT
+      else if time_is_exceeded solver limits then
+        Sol.UNKNOWN
+      else
+        aux assumps'
+  in
+  let r = aux assumps in
+  let _ = Sol.retract_all solver in
+  r
+
+let shrink_core solver core step_limit =
+  let rec aux pending acc =
+    match pending with
+      | [] -> List.rev acc |> Array.of_list
+      | at :: rest ->
+        begin
+          match solve_with_assumptions solver (List.rev_append acc rest) step_limit with
+          | Sol.UNSAT -> aux rest acc
+          | _ -> aux rest (at :: acc)
+        end
+  in
+  aux (Array.to_list core) []
+
+
+ (* Alternate reinterpretation of core-guided optimisation for integers.
  * Instead of carving off slices of int-vars, it just groups subterms.
  *)
 module IntCore : sig
@@ -1120,12 +1160,16 @@ end = struct
     H.fold (fun x st r ->
       r &&
       let x_ub = st.lb + (gap / st.coeff) in
-      (* let _ = Format.fprintf Format.err_formatter "%% [var lb: %d, st.lb: %d, ub: %d, new_ub: %d@."
-        (Sol.ivar_lb x) st.lb (Sol.ivar_ub x) x_ub in *)
-      Sol.post_atom solver (Sol.ivar_le x x_ub)) state.thresholds true
+      if x_ub < (Sol.ivar_ub x) then
+        (* let _ = Format.fprintf Format.err_formatter "%% [var lb: %d, st.lb: %d, ub: %d, new_ub: %d@."
+          (Sol.ivar_lb x) st.lb (Sol.ivar_ub x) x_ub in *)
+        Sol.post_atom solver (Sol.ivar_le x x_ub)
+      else true) state.thresholds true
 
   let update_incumbent (config : configuration) solver state m =
     let m_obj = Sol.int_value m state.obj in
+    (* let _ = Format.fprintf Format.err_formatter "%% model value: %d@." m_obj in *)
+    assert (m_obj >= state.obj_lb) ;
     let _ =
       if m_obj < state.obj_ub then
         begin
@@ -1242,14 +1286,6 @@ end = struct
     Sol.retract_all solver ;
     result
 
-  let solve_with_assumption solver at limits =
-    if not (Sol.assume solver at) then
-      Sol.UNSAT
-    else if time_is_exceeded solver limits then
-      Sol.UNKNOWN
-    else
-      Sol.solve solver limits
-
   let probe_lb solver state x b =
   match !Opts.obj_probe_limit with
   | None -> b (* Don't probe *)
@@ -1322,7 +1358,11 @@ end = struct
           *)
         let _ = B.linear_le solver At.at_True (Array.of_list ((-1, p) :: ts)) 0 in
         H.add state.pred_map (Sol.ivar_pred p) p ;
-        H.add state.thresholds p term ;
+        (* ) H.add state.thresholds p term ; ( *)
+        let lb' = probe_lb solver state p term.lb in
+        state.obj_lb <- state.obj_lb + term.coeff * (lb' - term.lb) ;
+        H.add state.thresholds p { lb = lb' ; coeff = term.coeff }
+        (* *)
       end
     
   let decrease_coeff state =
@@ -1366,8 +1406,10 @@ end = struct
            in
            solve config solver state
          end
-      | UNSAT core ->
+      | UNSAT core_ ->
          begin
+           (* let core = shrink_core solver core_ { (Sol.unlimited ()) with Sol.max_conflicts = 50 } in *)
+           let core = core_ in
            if Array.length core > 0 then
              begin
               let core' =
