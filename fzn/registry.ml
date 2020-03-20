@@ -272,6 +272,15 @@ let int_lin_le_HR s args anns =
   | Pr.Bv_bool false -> true
   | Pr.Bv_var r -> post_lin_le s r cs xs k
 
+let int_lin_le_imp s args anns =
+  let cs = Pr.get_array Pr.get_int args.(0) in
+  let xs = Pr.get_array (fun x -> x) args.(1) in
+  let k = Pr.get_int args.(2) in
+  match Pr.get_bval args.(3) with
+  | Pr.Bv_bool true -> post_lin_le s At.at_True cs xs k
+  | Pr.Bv_bool false -> true
+  | Pr.Bv_var r -> post_lin_le s r cs xs k
+
 (* r -> sum c_i x_i != k. *)
 let post_lin_ne s r cs xs k =
   let terms = Array.init (Array.length xs) (fun i -> cs.(i), xs.(i)) in
@@ -567,6 +576,12 @@ let int_le_HR solver args anns =
   | Pr.Bv_bool false -> true
   | Pr.Bv_var r -> post_int_diff solver r args.(0) args.(1) 0
 
+let int_le_imp solver args anns =
+  match Pr.get_bval args.(2) with
+  | Pr.Bv_bool true -> post_int_diff solver At.at_True args.(0) args.(1) 0 
+  | Pr.Bv_bool false -> true
+  | Pr.Bv_var r -> post_int_diff solver r args.(0) args.(1) 0
+
 let int_lt_reif solver args anns =
   match args.(2) with
   | Pr.Blit true -> post_int_diff solver At.at_True args.(0) args.(1) (-1) 
@@ -633,6 +648,24 @@ let int_eq_HR solver args anns =
       && B.int_le solver r y x 0
   end
 
+let int_eq_imp solver args anns =
+  match Pr.get_bval args.(2) with
+  | Pr.Bv_bool true -> int_eq solver args anns
+  | Pr.Bv_bool false -> true
+  | Pr.Bv_var r ->
+  begin
+    match Pr.get_ival args.(0), Pr.get_ival args.(1) with
+    | Pr.Iv_int k1, Pr.Iv_int k2 -> 
+      if k1 = k2 then true else S.post_atom solver (At.neg r)
+    | (Pr.Iv_var x, Pr.Iv_int k)
+    | (Pr.Iv_int k, Pr.Iv_var x) ->
+      let at = S.ivar_eq x k in
+      S.post_clause solver [|At.neg r ; at |]
+    | Pr.Iv_var x, Pr.Iv_var y ->
+      B.int_le solver r x y 0
+      && B.int_le solver r y x 0
+  end
+
 let int_ne_reif solver args anns =
   match Pr.get_bval args.(2) with
   | Pr.Bv_bool true -> int_ne solver args anns
@@ -660,6 +693,26 @@ let int_ne_reif solver args anns =
 
 let int_ne_HR solver args anns =
   match get_HR_var args.(2) args.(3) with
+  | Pr.Bv_bool true -> int_ne solver args anns
+  | Pr.Bv_bool false -> true
+  | Pr.Bv_var r ->
+  begin
+    match Pr.get_ival args.(0), Pr.get_ival args.(1) with
+    | Pr.Iv_int k1, Pr.Iv_int k2 ->
+      if k1 = k2 then
+        S.post_atom solver (At.neg r)
+      else
+        true
+    | (Pr.Iv_var x, Pr.Iv_int k)
+    | (Pr.Iv_int k, Pr.Iv_var x) ->
+      let at = S.ivar_ne x k in
+      S.post_clause solver [|At.neg r ; at |]
+    | Pr.Iv_var x, Pr.Iv_var y ->
+      B.int_ne solver r x y
+  end
+
+let int_ne_imp solver args anns =
+  match Pr.get_bval args.(2) with
   | Pr.Bv_bool true -> int_ne solver args anns
   | Pr.Bv_bool false -> true
   | Pr.Bv_var r ->
@@ -780,6 +833,7 @@ let initialize () =
      "int_lin_le", int_lin_le ;
      "int_lin_le_reif", int_lin_le_reif ;
      "int_lin_le_HR", int_lin_le_HR ;
+     "int_lin_le_imp", int_lin_le_imp ;
      "int_lin_eq", int_lin_eq ;
      "int_lin_eq_reif", int_lin_eq_reif ;
      "int_lin_ne", int_lin_ne ;
@@ -790,14 +844,17 @@ let initialize () =
      "int_le", int_le ;
      "int_le_reif", int_le_reif ;
      "int_le_HR", int_le_HR ;
+     "int_le_imp", int_le_imp ;
      "int_lt", int_lt ;
      "int_lt_reif", int_lt_reif ;
      "int_lt_HR", int_lt_HR ;
      "int_abs", int_abs ;
      "int_eq_reif", int_eq_reif ;
      "int_eq_HR", int_eq_HR ;
+     "int_eq_imp", int_eq_imp ;
      "int_ne_reif", int_ne_reif ;
      "int_ne_HR", int_ne_HR ;
+     "int_ne_imp", int_ne_HR ;
      "bool2int", bool2int ;
      "bool_eq", bool_eq ;
      "bool_eq_reif", bool_eq_reif ;

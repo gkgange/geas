@@ -113,6 +113,9 @@ let int_div args =
 let reif c args =
   (Pr.get_bool (Util.array_last args)) = c args
 
+let imp c args =
+  (not (Pr.get_bool (Util.array_last args))) || c args
+
 let bool2int args =
   let b = Pr.get_bool args.(0) in
   let x = Pr.get_int args.(1) in
@@ -227,14 +230,18 @@ let check_funs =
        "int_eq", int_rel (=) ;
        "int_ne", int_rel (<>) ;
        "int_ne_reif", reif (int_rel (<>)) ;
+       "int_ne_imp", imp (int_rel (<>)) ;
        "int_eq_reif", reif (int_rel (=)) ;
+       "int_eq_imp", imp (int_rel (=)) ;
        "int_le", int_rel (<=) ;
        "int_le_reif", reif (int_rel (<=)) ;
+       "int_le_imp", imp (int_rel (<=)) ;
        "int_lt", int_rel (<) ;
        "int_lt_reif", reif (int_rel (<)) ;
        "int_lin_le_reif", reif (int_linear_rel (<=)) ;
        "int_lin_le", int_linear_rel (<=) ;
        "int_lin_le_reif", reif (int_linear_rel (<=)) ;
+       "int_lin_le_imp", imp (int_linear_rel (<=)) ;
        "int_lin_ne", int_linear_rel (<>);
        "int_lin_ne_reif", reif (int_linear_rel (<>));
        "int_lin_eq", int_linear_rel (=) ;
