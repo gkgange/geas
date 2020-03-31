@@ -31,7 +31,7 @@ MLMODULES=\
 	 polarity half_reify \
    registry check \
    build \
-   lexer parser
+   fznLexer fznParser
 
 OCAMLINC=-I ../ml
 
@@ -59,7 +59,7 @@ TESTS_PROF=$(TESTS:%=%.p)
 TESTS_DEBUG=$(TESTS:%=%.debug)
 
 #all: opt byte
-all: opt
+all: opt fzn_geas_top
 
 #byte: $(TARGETS_BYTE) $(TESTS_BYTE)
 #opt: $(TARGETS) $(TESTS)
@@ -84,7 +84,7 @@ geas.a: ../ml/geas.a
 libgeas_ml.a: ../ml/libgeas_ml.a
 	cp ../ml/libgeas_ml.a .
 
-$(TARGETS) : % : $(MLMODULES:%=%.cmx) %.ml $(PHAGE_LIB)
+$(TARGETS) : % : $(MLMODULES:%=%.cmx) %.ml
 #	$(OCAMLFIND) ocamlopt $(OCAMLOPTFLAGS) -o $@ 
 	$(OCAMLOPT) $(OCAMLOPTFLAGS) -o $@ \
   -ccopt "-L $(CAML_PREFIX)/lib/ocaml -L $(CAMLIDL_PREFIX)/lib/camlidl" \
@@ -105,13 +105,21 @@ $(TARGETS_PROF) : %.p : $(MLMODULES:%=%.p.cmx) %.ml
   ../ml/geas.cmxa \
   $(subst .p,.mli,$@) $^
 
+fzn_geas_top : $(MLMODULES:%=%.cmo)
+	$(OCAMLMKTOP) $(OCAMLFLAGS) -custom -o $@ \
+	../ml/geas.cma \
+  $(MLMODULES:%=%.cmo) \
+  -ccopt "-ggdb" \
+  -ccopt "-L $(CAML_PREFIX)/lib/ocaml -L $(CAMLIDL_PREFIX)/lib/camlidl" \
+	-ccopt "-L . -L ../ml -L ../lib " -cclib "-lcamlidl -lstdc++ -lgeas_ml"
+
 clobber: clean
 	/bin/rm -f Makefile.depend TAGS
 	/bin/rm -f $(TARGETS) $(TARGETS_BYTE) $(TARGETS_PROF) $(TARGETS_DEBUG)
 
 clean:
 	/bin/rm -f *.cm[ioxat] *.cmti *.o *.cmxa *.annot *.html *.ps *.pdf *.dvi *.out
-	/bin/rm -f lexer.ml
+	/bin/rm -f fznLexer.ml
 	/bin/rm -f *.aux *.bbl *.blg *.dvi *.pdf *.log *.toc *.idx *.ilg *.ind ocamldoc*.tex ocamldoc.sty
 
 wc: $(SRC)

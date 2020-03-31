@@ -8,6 +8,27 @@ module Q = Queue
 let div_floor x d = int_of_float @@ floor @@ (float_of_int x) /. (float_of_int d)
 let div_ceil x d = int_of_float @@ ceil @@ (float_of_int x) /. (float_of_int d)
 
+let gcd x y =
+  let rec aux x y = 
+    match y with
+    | 0 -> x
+    | _ -> aux y (x mod y)
+  in
+  if x < y then
+    aux y x
+  else
+    aux x y
+
+let gcd_list xs =
+  let rec aux ys acc =
+    match ys with
+    | [] -> acc
+    | y :: ys' -> aux ys' (gcd acc y)
+  in
+  match xs with
+  | [] -> failwith "gcd of empty list."
+  | x :: xs -> aux xs x
+
 module HashSet = struct
   type 'a t = ('a, unit) H.t
 
@@ -121,3 +142,14 @@ let array_everyi f xs =
 let array_combine a b =
   let sz = min (Array.length a) (Array.length b) in
   Array.init sz (fun i -> a.(i), b.(i))
+
+let array_fold1 f xs =
+  let sz = Array.length xs in
+  assert (sz > 0) ;
+  let rec aux k acc =
+    if k < sz then
+      aux (k+1) (f acc xs.(k))
+    else
+      acc
+  in
+  aux 1 xs.(0)

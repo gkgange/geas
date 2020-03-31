@@ -14,6 +14,10 @@ type reform_mode =
   | ReformEach
   | ReformEager
 
+type core_type =
+  | IntCore
+  | SliceCore
+
 let infile = ref None
 let outfile = ref None
 let verbosity = ref 0
@@ -32,12 +36,14 @@ let limits = ref (Solver.unlimited ())
 
 let obj_probe_limit = ref None
 let core_opt = ref false
-let core_ratio = ref 0.2
+let core_ratio = ref None
 
 let core_harden = ref false
 
 let core_selection = ref Violation
 let core_reformulation = ref ReformEach
+let core_type = ref IntCore
+let core_factor_coeff = ref true
 
 let one_watch = ref true
 let global_diff = ref false
@@ -128,13 +134,26 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
      ) ;
      (
       "--core-ratio",
-      Arg.Float (fun r -> core_ratio := r),
+      Arg.Float (fun r -> core_ratio := Some r),
       " : how much of the resource budget to spend on core-driven optimization."
      ) ;
      (
       "--core-harden",
       Arg.Bool (fun b -> core_harden := b),
       " : whether to attempt to harden bounds during unsat core iterations (default: false)."
+     ) ;
+     (
+       "--core-type",
+       Arg.Symbol (["int" ; "slice"], fun s ->
+         core_type := match s with
+           | "int" -> IntCore
+           | "slice" -> SliceCore
+           | s -> failwith (Format.sprintf "ERROR: Unexpected core type \"%s\"" s)),
+       " : choose the type of unsat-core reformulation (default: int).") ;
+     (
+      "--factor-coeff",
+      Arg.Bool (fun b -> core_factor_coeff := b),
+      " : whether to factor coefficients during unsat core iterations (default: true)."
      ) ;
      (
       "--reformulate",

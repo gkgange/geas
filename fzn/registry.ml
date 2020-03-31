@@ -873,10 +873,12 @@ let initialize () =
      "array_var_bool_element", array_var_bool_element ;
      (* "bool_lin_le", bool_lin_le ; *)
      "fzn_all_different_int", all_different_int ;
+     "geas_all_different_int", all_different_int ;
      "fzn_all_different_except_0", all_different_except_0 ;
      "fzn_cumulative", cumulative ;
      "fzn_cumulative_var", cumulative_var ;
      "fzn_disjunctive", disjunctive ;
+     "geas_disjunctive", disjunctive ;
      "fzn_global_cardinality", global_card ;
      "geas_all_different_int", all_different_int ;
      "geas_all_different_except_0", all_different_except_0 ;
