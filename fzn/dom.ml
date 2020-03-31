@@ -30,6 +30,39 @@ let union x y = match x, y with
         ((List.fold_left min l k),
          (List.fold_left max u k))
 
+let set_intersect xs ys =
+  let rec aux xs ys acc =
+    match xs, ys with
+    | [], _
+    | _, [] -> List.rev acc
+    | (x :: xs', y :: ys') when x < y ->
+      aux xs' (y :: ys') acc
+    | (x :: xs', y :: ys') when x > y ->
+      aux (x :: xs') ys' acc
+    | x :: xs', _ :: ys' ->
+      aux xs' ys' (x :: acc)
+  in aux xs ys []
+
+let intersect x y = match x, y with
+  | Set kx, Set ky ->
+    begin
+      match set_intersect kx ky with
+      | [] -> None
+      | z -> Some (Set z)
+    end
+  | Range (lx, ux), Range(ly, uy) ->
+    let lz = max lx ly in
+    let uz = min ux uy in
+    if lz > uz then
+      None
+    else
+      Some (Range (lz, uz))
+  | Range (l, u), Set ks
+  | Set ks, Range (l, u) ->
+    match List.filter (fun k -> l <= k && k <= u) ks with
+    | [] -> None
+    | z -> Some (Set z)
+
 let bounds d =
   match d with
   | Range (l, u) -> l, u

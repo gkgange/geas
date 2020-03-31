@@ -476,6 +476,18 @@ let simp_linterms st cs xs k =
   (* let ts' = List.sort (fun (k, x) (k', x') -> compare x x') !ts in *)
   !ts, !k'
 
+let simp_set_in pr st args anns =
+  let dom = match args.(1) with
+  | Pr.Set d -> d
+  | _ -> failwith "Type mismatch in set_in."
+  in
+  match Pr.get_ival args.(0) with
+  | Pr.Iv_int k -> () (* TODO: Check domain *)
+  | Pr.Iv_var x ->
+    if not (Pr.dom_meet pr x dom) then
+      raise Pr.Root_failure
+
+
 let rebuild_lin_args ts k =
   let cs = Array.map (fun (k, x) -> Pr.Ilit k) ts in
   let xs = Array.map (fun (k, x) -> Pr.Ivar x) ts in
@@ -564,6 +576,7 @@ let init () =
       "bool_eq", simp_bool_eq ; 
       "bool_ne", simp_bool_ne ;
       "bool2int", simp_bool2int ;
+      "set_in", simp_set_in ;
     ] in
   List.iter (fun (id, h) -> H.add registry id h) handlers
 

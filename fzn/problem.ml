@@ -114,6 +114,14 @@ let new_bvar m name ann =
 
 let dom_of model iv = (Dy.get model.ivals iv).dom
 
+let dom_meet m iv dom =
+  let info = Dy.get m.ivals iv in
+  match Dom.intersect info.dom dom with
+  | None -> false
+  | Some d' ->
+    let _ = Dy.set m.ivals iv { info with dom = d' } in
+    true
+
 let post model id args anns =
   Dy.add model.constraints ((id, args), anns)
 
