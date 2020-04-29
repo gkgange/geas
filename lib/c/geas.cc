@@ -9,7 +9,6 @@
 #include <geas/c/geas.h>
 #include <geas/c/marshal.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -386,7 +385,7 @@ float float_value(model m, fpvar v) {
   return get_fpvar(v)->model_val(*get_model(m));
 }
 
-pid_t ivar_pid(intvar v) { return get_intvar(v)->p; }
+pred_id_t ivar_pid(intvar v) { return get_intvar(v)->p; }
 
 int ivar_lb(intvar v) {
   geas::solver_data* s = get_intvar(v)->ext->s;

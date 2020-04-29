@@ -5,6 +5,7 @@
 #include <geas/solver/stats.h>
 #include <geas/solver/options.h>
 
+#include <stdint.h>
 #ifdef __cplusplus
 #include <cstdio>
 extern "C" {
@@ -14,6 +15,7 @@ extern "C" {
 
 typedef enum { SAT, UNSAT, UNKNOWN } result;
 
+typedef uint32_t pred_id_t;
 struct solver_s;
 typedef struct solver_s* solver;
 
@@ -135,7 +137,7 @@ int intslice_value(model, intslice);
 float float_value(model, fpvar);
 int atom_value(model, atom);
 
-pid_t ivar_pid(intvar);
+pred_id_t ivar_pid(intvar);
 int ivar_lb(intvar);
 int ivar_ub(intvar);
 int current_ivar_lb(intvar);
