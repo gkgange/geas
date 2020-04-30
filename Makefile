@@ -13,7 +13,7 @@ CXXFLAGS    = -I ./include -Wall -Wno-deprecated -fno-rtti -fPIC # -ffloat-store
 CXXFLAGS += --std=c++11
 CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS
 CXXFLAGS += $(PROF)
-LFLAGS    = -lz -Wall -Wno-deprecated
+LFLAGS    = -Wall -Wno-deprecated
 LFLAGS   += $(PROF)
 
 #CXXFLAGS += -DLOG_ALL
