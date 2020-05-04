@@ -40,7 +40,7 @@ struct ivar_emap {
     return at;
   }
 
-  bool in_domain(ctx_t& ctx, pval_t v) {
+  bool in_domain(const ctx_t& ctx, pval_t v) {
     if(v < base) return false;
     if(base+sz <= v) return false;
 
@@ -107,7 +107,7 @@ found_min:
   }
 
   // Doesn't check bounds.
-  bool in_domain(ctx_t& ctx, int k) const {
+  bool in_domain(const ctx_t& ctx, int k) const {
     // Find the correct index.
     unsigned int low = 0;
     unsigned int high = sz;
@@ -232,7 +232,7 @@ public:
   int dom_sz_exact(ctx_t& ctx) const; // Potentially expensive
 
   // FIXME: Update to deal with sparse
-  num_range_t<val_t> domain(ctx_t& ctx) const {
+  num_range_t<val_t> domain(const ctx_t& ctx) const {
     return num_range(lb(ctx), ub(ctx)+1);
   }
   num_range_t<val_t> domain(solver_data* s) const;
