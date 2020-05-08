@@ -987,6 +987,7 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
     ex_info ex(cast::conv<ex_info>(ei));
     
     // Collect the values in the Hall set.
+    #if 1
     for(int ii = ex.scc_begin; ii < ex.scc_end; ++ii) {
       int v(match[sccs[ii]]);
       seen[block(v)] |= bit(v);
@@ -997,12 +998,53 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
       uint64_t* x_dom0(dom0[xi]);
       for(int b = 0; b < req_words(dom_sz); ++b) {
         uint64_t word(x_dom0[b] & ~seen[b]);
-        Iter_Word(low + (b << block_bits()), word, [this, &expl, xi](int c) {
-            EX_PUSH(expl, xs[xi] == c);
+        // Iter_Word(low + (b << block_bits()), word, [this, &expl, xi](int c) {
+        //     EX_PUSH(expl, xs[xi] == c);
+        //   });
+        Iter_Word((b << block_bits()), word, [this, &expl, xi](int c) {
+            EX_PUSH(expl, eq_atoms[xi][c]);
           });
       }
     }
     clear_seen();
+    #else
+    int ex_lb = dom_sz;
+    int ex_ub = -1;
+    for(int ii = ex.scc_begin; ii < ex.scc_end; ++ii) {
+      int v(match[sccs[ii]]);
+      seen[block(v)] |= bit(v);
+      ex_lb = std::min(ex_lb, v);
+      ex_ub = std::max(ex_ub, v);
+    }
+    // Could do bit-vector stuff here.
+    repair_tl = repair_queue;
+    for(int ii = ex_lb+1; ii < ex_ub-1; ++ii) {
+      if(! (seen[block(ii)] & bit(ii)) ) {
+        *repair_tl = ii;
+        ++repair_tl;
+      }
+    }
+    clear_seen();
+    // Variables in the SCC must take some outside value.
+    if(0 < ex_lb) {
+      for(int xi : range(&sccs[ex.scc_begin], &sccs[ex.scc_end]))
+        EX_PUSH(expl, xs[xi] < low + ex_lb);
+    }
+    if(ex_ub < dom_sz) {
+      for(int xi : range(&sccs[ex.scc_begin], &sccs[ex.scc_end]))
+        EX_PUSH(expl, xs[xi] > low + ex_ub);
+    }
+    for(int ii = ex.scc_begin; ii < ex.scc_end; ++ii) {
+      int xi(sccs[ii]);
+      uint64_t* x_dom0(dom0[xi]);
+      for(int c : range(repair_queue, repair_tl)) {
+        if(x_dom0[block(c)] & bit(c)) {
+          EX_PUSH(expl, eq_atoms[xi][c]);
+        }
+      }
+    }
+    repair_tl = repair_queue;
+    #endif
   }
 
   struct attachment {
@@ -1037,7 +1079,7 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
   }
   inline static int compute_dom_max(solver_data* s, const vec<intvar>& xs) {
     auto it(xs.begin()); ++it;
-    return std::accumulate(it, xs.end(), xs[0].lb(s),
+    return std::accumulate(it, xs.end(), xs[0].ub(s),
                            [s](int high, const intvar& x) { return std::max(high, (int) x.ub(s)); });
   }
 
@@ -1087,6 +1129,9 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
         scc_idx[ii] = ii;
       }
       memset(touched, 0, sizeof(uint64_t) * req_words(sz));
+      memset(rseen, 0, sizeof(uint64_t) * req_words(sz));
+      memset(seen, 0, sizeof(uint64_t) * req_words(dom_sz));
+      memset(pred, 0, sizeof(int) * dom_sz);
 
       int high(compute_dom_max(s, xs));
 
@@ -1120,6 +1165,11 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
             attach(s, x != c, watch<&P::wake_val>(cast::conv<int>(attachment(xi, k)), Wt_IDEM));
           }
         }
+        eq_atoms.push();
+        vec<patom_t>& x_eq(eq_atoms.last());
+        for(int c = low; c < low + dom_sz; ++c)
+          x_eq.push(x == c);
+
         dom.push(x_dom);
         dom0.push(x_dom0);
         dom_saved.push(x_saved);
@@ -1409,6 +1459,8 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
   int dom_sz;
   int low; // Offset for values.
 
+  vec< vec<patom_t> > eq_atoms;
+  
     // Persistent state. Caching domain values, for quick iteration.
   vec<uint64_t*> dom;
   vec<char*> dom_saved;

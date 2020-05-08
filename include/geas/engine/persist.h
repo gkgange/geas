@@ -112,6 +112,10 @@ void push_level(solver_data* s);
 void pop_level(solver_data* s);
 void bt_to_level(solver_data* s, unsigned int l);
 
+// If we need to restore the data-trail for explanation.
+// Worth taking care, since we don't normally store intra-level checkpoints.
+void bt_data_to_pos(solver_data* s, unsigned int data_pos);
+   
 // When we backtrack beyond the current point, it will be
 // restored to val.
 template<class T>
@@ -134,7 +138,7 @@ inline void trail_push(persistence& p, T& elt) {
 // Save elt, and update
 template<class T>
 inline void trail_change(persistence& p, T& elt, T val) {
-  trail_push(p, elt);      
+  trail_push(p, elt);
   elt = val;
 }
 

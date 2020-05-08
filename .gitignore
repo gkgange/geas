@@ -40,3 +40,8 @@ cmake-build-relwithdebuginfo
 *.out
 *.app
 
+*.cm[ioax]
+*.cmxa
+
+*~
+\#*#

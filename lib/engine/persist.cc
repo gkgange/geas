@@ -65,6 +65,14 @@ inline void bt_data(solver_data* s, unsigned int l) {
   dropTo_(p.dtrail_lim, l);
 }
 
+void bt_data_to_pos(solver_data* s, unsigned int p_lim) {
+  persistence& p(s->persist);
+  assert(p_lim >= p.dtrail_lim.last());
+  for(auto e : rev_range(&p.data_trail[p_lim], p.data_trail.end()))
+    restore_data_elt(s, e);
+  dropTo_(p.data_trail, p_lim);
+}
+
 inline void bt_explns(solver_data* s, unsigned int l) {
   persistence& p(s->persist);
   unsigned int e_lim = p.expl_trail_lim[l];

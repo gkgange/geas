@@ -4,6 +4,7 @@
 #include <geas/engine/propagator.h>
 #include <geas/engine/propagator_ext.h>
 #include <geas/solver/solver_data.h>
+#include <geas/solver/solver_ext.h>
 #include <geas/vars/intvar.h>
 #include <geas/utils/bitops.h>
 
@@ -164,6 +165,171 @@ public:
   vec<int> dying_rows;
   vec<int> expired_rows;
 };
+
+using namespace B64;
+template<class T>
+static T* alloc_words(int sz) {
+  T* mem(new T[sz]);
+  memset(mem, 0, sizeof(T) * sz);
+  return mem;
+}
+
+template<class T>
+static T* alloc(int sz) {
+  return alloc_words<T>(req_words(sz));
+}
+
+
+#if 0
+class int_elem_bv : public propagator, public prop_inst<int_elem_bv> {
+  watch_result wake_x(int xi) {
+    if(!in_dom(idx_dom, xi))
+      return Wt_Keep;
+    rem(idx_dom, idx_saved, xi);
+
+    int ri = x_row[xi];
+    int b = z_residue[ri];
+
+    if(! (z_supp[ri][b] & idx_dom[b]) ) {
+      *z_check_tl = ri;
+      ++z_check_tl;
+      queue_prop();
+    }
+    return Wt_Keep;
+  }
+
+  watch_result wake_z(int ri) {
+    *z_elim_tl = ri;
+    ++z_elim_tl;
+
+    queue_prop();
+    return Wt_Keep;
+  }
+  
+  void ex_z(int ri, pval_t _p, vec<clause_elt>& expl) {
+    // z != ri, because all supports of ri were removed.
+    int base(0);
+    uint64_t* supp(z_supp[ri]);
+    for(int b = 0; b < req_words(idx_sz); ++b) {
+      Iter_Word(base, supp[b], [this, &expl](int c) {
+          EX_PUSH(idx == c);
+        });
+      base += 64;
+    }
+  }
+
+public:  
+  int_elem_bv(solver_data* s, intvar _z, vec<int>& ys, intvar _x)
+    : propagator(s)
+    , idx_sz(_ys.size())
+    , rows_sz(0)
+    , z(_z), x(_x)
+    , idx_dom(alloc<uint64_t>(idx_sz))
+    , idx_saved(alloc<char>(idx_sz))
+
+    , idx_row(new int[idx_sz])
+  {
+    // Init all the bookkeeping.
+    vec<int> idx_perm;
+    for(int ii : irange(idx_sz))
+      idx_perm.push(ii);
+    std::sort(idx_perm.begin(), idx_perm.end(),
+              [&ys](int x, int y) {
+                if(ys[x] != ys[y]) return ys[x] < ys[y];
+                return x < y;
+              });
+    // Compute the set of feasible z-values, and the
+    // corresponding row IDs.
+    vec<int> row_vals;
+    int rv = vals[idx_perm[0]];
+    uint64_t* r_supp = alloc<uint64_t>(idx_sz);
+    idx_row[idx_perm[0]] = 0;
+    r_supp[block(idx_perm[0])] |= bit(idx_perm[0]);
+
+    for(int ii : idx_perm.tail()) {
+      if(vals[ii] != rv) {
+        row_vals.push(rv);
+        z_supp.push(r_supp);
+        z_saved.push(alloc<char>(idx_sz));
+
+        rv = vals[ii];
+        r_supp[block(ii)] |= bit(ii);
+      }
+      idx_row[ii] = row_vals.size();
+    }
+    row_vals.push(rv);
+    z_supp.push(r_supp);
+    z_saved.push(alloc<char>(idx_sz));
+
+    // 
+  }
+
+  inline bool prop_row(int ri) {
+    // Check if there is still some support.
+    uint64_t* supp(z_supp[ri]);
+    for(int b = 0; b < req_words(idx_sz); b++) {
+      if(supp[b] & idx_dom[b]) {
+        z_residue[ri] = b;
+        return true;
+      }
+    }
+    return enqueue(*s, z != row_val[ri], expl<&P::ex_z>(ri));
+  }
+
+  bool propagate(vec<clause_elt>& confl) {
+    for(int ri : range(z_check, z_check_tl)) {
+      if(!prop_row(ri))
+        return false;
+    }
+
+    // Zero out any rows corresponding to ri.
+    for(int ri : range(z_elim, z_elim_tl)) {
+      uint64_t* supp(z_supp[ri]);
+
+      int base = 0;
+      for(int b = 0; b < req_words(idx_sz); ++b) {
+        uint64_t word(idx_dom[b] & supp[b]);
+        if(word) {
+          patom_t r(row_atom[ri]);
+          if(!Forall_Word(base, word, [this, r](int c) {
+                return enqueue(*s, idx != c, r);
+              }))
+            return false;
+          // Probably not necessary, so long as idempotence is
+          // working.
+          trail_save(s->persist, idx_dom[b], idx_saved[b]);
+          idx_dom[b] &= ~supp[b];
+        }
+        base += 64;
+      }
+    }
+
+    return true;
+  }
+
+  void cleanup(void) {
+    is_queued = false;
+    z_check_tl = z_queue;
+    z_elim_tl = z_elim;
+  }
+
+  intvar z;
+  intvar x;
+
+  patom_t* row_atom; // z_row -> atom
+  int* x_row; // i -> z_row
+
+  // Persistent state
+  int64_t* x_dom; // set(i)
+  vec<int64_t*> z_supp; // z_row -> set(i)
+
+  int* z_residue; // r -> block
+  
+  // Transient state
+  int* z_queue;
+  int* z_queue_tl;
+};
+#endif
 
 class int_elem_bnd : public propagator, public prop_inst<int_elem_bnd> {
   static int prop_count;
@@ -1087,7 +1253,701 @@ public:
 };
 #endif
 
-using namespace B64;
+inline int get_dom_min(solver_data* s, const vec<intvar>& xs) {
+  int low(xs[0].lb(s));
+  for(const intvar& x : range(xs.begin()+1, xs.end()))
+    low = std::min(low, (int) x.lb(s));
+  return low;
+}
+inline int get_dom_max(solver_data* s, const vec<intvar>& xs) {
+  int high(xs[0].ub(s));
+  for(const intvar& x : range(xs.begin()+1, xs.end()))
+    high = std::max(high, (int) x.ub(s));
+  return high;
+}
+
+// WARNING: Not safe to add extra [instance]s except at the root node,
+// because if the instances array is reallocated, the location of [is_fixed]
+// might change.
+class elem_var_env : public propagator, public prop_inst<elem_var_env> {
+  struct attachment {
+    attachment(void) : idx(0), val(0) { }
+    attachment(int _idx, int _val) : idx(_idx), val(_val) { }
+
+    int idx : 16;
+    int val : 16;
+  };
+
+  struct instance {
+    void destroy(void) {
+      delete[] z_dom;
+      delete[] idx_dom;
+      delete[] z_dom0;
+      delete[] idx_dom0;
+
+      delete[] z_saved;
+      delete[] idx_saved;
+
+      delete[] z_dtrail_pos;
+      delete[] idx_dtrail_pos;
+
+      delete[] z_supp;
+      delete[] idx_supp;
+    }
+
+    intvar z;
+    intvar idx;
+
+    char is_fixed;
+    int fixed_idx;
+
+    uint64_t* z_dom;
+    uint64_t* idx_dom;
+
+    uint64_t* z_dom0;
+    uint64_t* idx_dom0;
+    
+    char* z_saved;
+    char* idx_saved;
+
+    // When z = c was pruned, what was the data level?
+    int* z_dtrail_pos;
+    // Equiv for idx.
+    int* idx_dtrail_pos;
+    
+    int* z_supp;
+    int* idx_supp;
+  };
+
+  inline void save(uint64_t& b, char& flag) {
+    if(flag) return;
+    trail_push(s->persist, b);
+    flag = 1;
+    saved_flags.push(&flag);
+  }
+
+  inline void rem(uint64_t* mem, char* saved, int val) {
+    save(mem[block(val)], saved[block(val)]);
+    mem[block(val)] &= ~bit(val);
+  }
+  // For instance variables i/z, we don't need intra-level checkpoints,
+  // so just use the normal trail-save mechanism.
+  inline void inst_rem(uint64_t* mem, char* saved, int val) {
+    trail_save(s->persist, mem[block(val)], saved[block(val)]);
+    mem[block(val)] &= ~bit(val);
+  }
+
+  // Checking supports
+  bool _check_val(instance& i, int val) {
+    const uint64_t* v_inv(inv_dom[val]);
+    for(int b = 0; b < req_words(idx_sz); ++b) {
+      if(i.idx_dom[b] & v_inv[b]) {
+        i.z_supp[val] = b;
+        return true;
+      }
+    }
+    return false;
+  }
+  inline bool check_val(instance& i, int val) {
+    int b = i.z_supp[val];
+    if(i.idx_dom[b] & inv_dom[val][b])
+      return true;
+    return _check_val(i, val);
+  }
+
+  bool _check_idx(instance& i, int idx) {
+    const uint64_t* x_dom(elt_dom[idx]);
+    for(int b = 0; b < req_words(dom_sz); ++b) {
+      if(i.z_dom[b] & x_dom[b]) {
+        i.idx_supp[idx] = b;
+        return true;
+      }
+    }
+    return false;
+  }
+  inline bool check_idx(instance& i, int idx) {
+    int b = i.idx_supp[idx];
+    if(i.z_dom[b] & elt_dom[idx][b])
+      return true;
+    return _check_idx(i, idx);
+  }
+
+  inline bool memb(uint64_t* mem, int val) const {
+    return mem[block(val)] & bit(val);
+  }
+
+  void ex_z(int tag, pval_t _p, vec<clause_elt>& expl) {
+    attachment att(cast::conv<attachment>(tag));
+    instance& i(instances[att.idx]);
+
+    // Make sure inv_dom is restored to the moment of propagation.
+    bt_data_to_pos(s, i.z_dtrail_pos[att.val]);
+
+    uint64_t* v_inv0(inv_dom0[att.val]);
+    uint64_t* v_inv(inv_dom[att.val]);
+
+    int base = 0;
+    for(int b = 0; b < req_words(idx_sz); ++b, base += 64) {
+      uint64_t to_explain(i.idx_dom0[b] & v_inv0[b]);
+
+      // Anything which still supported att.val at propagation time,
+      // must have been removed from dom(idx).
+      uint64_t by_idx(to_explain & v_inv[b]);
+      uint64_t by_val(to_explain & ~v_inv[b]);
+
+      Iter_Word(base, by_idx, [this, &i, &expl](int c) {
+          EX_PUSH(expl, i.idx == c);
+        });
+      Iter_Word(base, by_val, [this, att, &expl](int c) {
+          EX_PUSH(expl, ys[c] == low + att.val);
+        });
+    }
+  }
+
+  void ex_idx(int tag, pval_t _p, vec<clause_elt>& expl) {
+    attachment att(cast::conv<attachment>(tag));
+    instance& i(instances[att.idx]);
+
+    // Make sure inv_dom is restored to the moment of propagation.
+    bt_data_to_pos(s, i.idx_dtrail_pos[att.val]);
+
+    uint64_t* x_dom0(elt_dom0[att.val]);
+    uint64_t* x_dom(elt_dom[att.val]);
+
+    int base = 0;
+    for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
+      uint64_t to_explain(i.z_dom0[b] & x_dom0[b]);
+
+      // Anything which still supported att.val at propagation time,
+      // must have been removed from dom(z).
+      uint64_t by_z(to_explain & x_dom[b]);
+      uint64_t by_val(to_explain & ~x_dom[b]);
+
+      Iter_Word(base, by_z, [this, &i, &expl](int c) {
+          EX_PUSH(expl, i.z == low + c);
+        });
+      Iter_Word(base, by_val, [this, att, &expl](int c) {
+          EX_PUSH(expl, ys[att.val] == low + c);
+        });
+    }
+  }
+
+  // Explain why ys[i] cannot take v.
+  void ex_rem_x(int tag, pval_t _p, vec<clause_elt>& expl) {
+    attachment att(cast::conv<attachment>(tag));
+    instance& i(instances[att.idx]);
+    EX_PUSH(expl, i.idx != i.fixed_idx);
+    EX_PUSH(expl, i.z == low + att.val);
+  }
+
+  watch_result wake_z(int tag) {
+    attachment att(cast::conv<attachment>(tag));
+    instance& i(instances[att.idx]);
+    if(! (i.z_dom[block(att.val)] & bit(att.val)) )
+      return Wt_Keep;
+
+    inst_rem(i.z_dom, i.z_saved, att.val);
+
+    z_change[block(att.idx)] |= bit(att.idx);
+
+    queue_prop();
+    return Wt_Keep;
+  }
+
+  watch_result wake_idx(int tag) {
+    attachment att(cast::conv<attachment>(tag));
+    instance& i(instances[att.idx]);
+    // This shouldn't happen if idempotence handling works.
+    if(! (i.idx_dom[block(att.val)] & bit(att.val)) )
+      return Wt_Keep;
+
+    inst_rem(i.idx_dom, i.idx_saved, att.val);
+
+    idx_change[block(att.idx)] |= bit(att.idx);
+
+    queue_prop();
+    return Wt_Keep;
+  }
+
+  watch_result wake_rem(int tag) {
+    attachment att(cast::conv<attachment>(tag));
+    rem(elt_dom[att.idx], elt_saved[att.idx], att.val);
+    rem(inv_dom[att.val], inv_saved[att.val], att.idx);
+    touched_vars[block(att.idx)] |= bit(att.idx);
+    touched_vals[block(att.val)] |= bit(att.val);
+
+    queue_prop();
+    return Wt_Keep;
+  }
+
+  watch_result wake_fix(int inst_id) {
+    instance& i(instances[inst_id]);
+    trail_change(s->persist, i.is_fixed, (char) 1);
+    i.fixed_idx = i.idx.lb(s);
+
+    z_change[block(inst_id)] |= bit(inst_id);
+
+    queue_prop();
+    return Wt_Keep;
+  }
+
+  bool check_sat(ctx_t& ctx);
+  bool check_unsat(ctx_t& ctx);
+
+public:
+  elem_var_env(solver_data* s, vec<intvar>& _ys)
+    : propagator(s), idx_sz(_ys.size())
+    , dom_sz(get_dom_max(s, _ys) - get_dom_min(s, _ys) + 1)
+    , low(get_dom_min(s, _ys))
+    , ys(new intvar[idx_sz])
+    , elt_dom(new uint64_t*[idx_sz])
+    , elt_dom0(new uint64_t*[idx_sz])
+    , elt_saved(new char*[idx_sz])
+    , inv_dom(new uint64_t*[dom_sz])
+    , inv_dom0(new uint64_t*[dom_sz])
+    , inv_saved(new char*[dom_sz])
+    , touched_vars(alloc<uint64_t>(idx_sz))
+    , touched_vals(alloc<uint64_t>(dom_sz))
+  {
+    int elt_words = idx_sz * req_words(dom_sz);
+    uint64_t* elt_mem = alloc_words<uint64_t>(elt_words);
+    uint64_t* elt0_mem = alloc_words<uint64_t>(elt_words);
+    char* elt_saved_mem = alloc_words<char>(elt_words);
+
+    int inv_words = dom_sz * req_words(idx_sz);
+    uint64_t* inv_mem = alloc_words<uint64_t>(inv_words);
+    uint64_t* inv0_mem = alloc_words<uint64_t>(inv_words);
+    char* inv_saved_mem = alloc_words<char>(inv_words);
+
+    int offset = 0;
+    for(int ii = 0; ii < idx_sz; ++ii) {
+      elt_dom[ii] = elt_mem + offset;
+      elt_dom0[ii] = elt0_mem + offset;
+      elt_saved[ii] = elt_saved_mem + offset;
+      offset += req_words(dom_sz);
+
+      ys[ii] = _ys[ii];
+    }
+
+    offset = 0;
+    for(int ii = 0; ii < dom_sz; ++ii) {
+      inv_dom[ii] = inv_mem + offset;
+      inv_dom0[ii] = inv0_mem + offset;
+      inv_saved[ii] = inv_saved_mem + offset;
+      offset += req_words(idx_sz);
+
+      int v(low + ii);
+      for(int jj = 0; jj < idx_sz; ++jj) {
+        if(ys[jj].in_domain(s->ctx(), v)) {
+          attach(s, ys[jj] != v,
+                 watch<&P::wake_rem>(cast::conv<int>(attachment(jj, ii))));
+          elt_dom[jj][block(ii)] |= bit(ii);
+          elt_dom0[jj][block(ii)] |= bit(ii);
+          inv_dom[ii][block(jj)] |= bit(jj);
+          inv_dom0[ii][block(jj)] |= bit(jj);
+        }
+      }
+    }
+  }
+
+  bool attach_instance(intvar idx, intvar z) {
+    int inst_id(instances.size());
+    instance i = {
+      z,
+      idx,
+
+      0, // is_fixed
+      0, // fixed_idx
+      
+      alloc<uint64_t>(dom_sz), // z_dom
+      alloc<uint64_t>(idx_sz), // idx_dom
+
+      alloc<uint64_t>(dom_sz), // z_dom0
+      alloc<uint64_t>(idx_sz), // idx_dom0
+
+      alloc<char>(dom_sz), // z_saved
+      alloc<char>(idx_sz), // idx_saved
+
+      new int[dom_sz], // z_dtrail_pos
+      new int[idx_sz], // idx_dtrail_pos
+
+      new int[dom_sz], // z_supp
+      new int[idx_sz] // idx_supp
+    };
+
+    make_eager(idx);
+    make_eager(z);
+    memset(i.z_supp, 0, sizeof(int) * dom_sz);
+    memset(i.idx_supp, 0, sizeof(int) * idx_sz);
+    
+    // Set bounds on idx/z.
+    if(idx.lb(s) < 0 && !set_lb(idx, 0, reason()))
+      return false;
+    if(idx_sz <= idx.ub(s) && !set_ub(idx, idx_sz-1, reason()))
+      return false;
+    if(z.lb(s) < low && !set_lb(z, low, reason()))
+      return false;
+    if(low + dom_sz <= z.ub(s) && !set_ub(z, low + dom_sz - 1, reason()))
+      return false;
+
+    // TODO: Propagate initial domains of z/idx.
+    
+    // Now initialize the data-structures.
+    for(int ii = 0; ii < idx_sz; ++ii) {
+      if(idx.in_domain(s->ctx(), ii)) {
+        attach(s, idx != ii, watch<&P::wake_idx>(cast::conv<int>(attachment(inst_id, ii))));
+        i.idx_dom[block(ii)] |= bit(ii);
+        i.idx_dom0[block(ii)] |= bit(ii);
+      }
+    }
+    idx.attach(E_FIX, watch<&P::wake_fix>(inst_id));
+
+    for(int ii = 0; ii < dom_sz; ++ii) {
+      if(z.in_domain(s->ctx(), low + ii)) {
+        attach(s, z != low + ii, watch<&P::wake_z>(cast::conv<int>(attachment(inst_id, ii))));
+        i.z_dom[block(ii)] |= bit(ii);
+        i.z_dom0[block(ii)] |= bit(ii);
+      }
+    }
+
+    // Make sure the wakeup queues have enough space.
+    instances.push(i);
+    if(z_change.size() < req_words(instances.size()))
+      z_change.push(0);
+    if(idx_change.size() < req_words(instances.size()))
+      idx_change.push(0);
+
+    z_change[block(inst_id)] |= bit(inst_id);
+    idx_change[block(inst_id)] |= bit(inst_id);
+    
+    return true;
+  }
+
+  inline bool _prop_z(int inst_id) {
+    int dtrail_pos = s->persist.data_trail.size();
+    instance& i(instances[inst_id]);
+
+    if(i.is_fixed) {
+     // Propagate onto the index.
+      uint64_t* x_dom(elt_dom[i.fixed_idx]);
+      char* x_saved(elt_saved[i.fixed_idx]);
+
+      int base = 0;
+      for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
+        uint64_t to_rem = x_dom[b] & ~i.z_dom[b];
+        if(to_rem) {
+          bool okay = Forall_Word(base, to_rem,
+                                    [this, inst_id, &i](int c) {
+                                      return enqueue(*s, ys[i.fixed_idx] != low + c,
+                                                     expl<&P::ex_rem_x>(cast::conv<int>(attachment(inst_id, c))));
+                                    });
+          if(!okay) return false;
+          // This is slightly annoying -- since later propagations might
+          // depend on the changes to x_dom, we need to push it
+          // even if it's already saved.
+          /*
+            // FIXME: Skipping for now, wakeup should take care of it
+            // next iteration.
+          trail_push(s->persist, x_dom[b]);
+          if(!x_saved[b]) {
+            saved_flags.push(&x_saved[b]);
+            x_saved[b] = true;
+          }
+          x_dom[b] &= i.z_dom[b];
+          */
+        }
+      }
+    } else {
+      // z has changed, but index is not fixed. In that case, just check all the indices.
+      int base = 0;
+      for(int b = 0; b < req_words(idx_sz); ++b, base += 64) {
+        uint64_t to_check(i.idx_dom[b]);
+        uint64_t i_rem(0);
+        bool okay = Forall_Word(base, to_check, [this, dtrail_pos, inst_id, &i, &i_rem](int c) {
+            // The same thing we do in prop_indices.
+            // TODO: Maybe factor it out.
+            if(check_idx(i, c))
+              return true;
+            // Otherwise, we need to propagate.
+            i.idx_dtrail_pos[c] = dtrail_pos;
+            if(!enqueue(*s, i.idx != c, expl<&P::ex_idx>(cast::conv<int>(attachment(inst_id, c)))))
+              return false;
+            i_rem |= bit(c);
+            return true;
+          });
+        if(!okay) return false;
+        if(i_rem) {
+          trail_save(s->persist, i.idx_dom[b], i.idx_saved[b]);
+          i.idx_dom[b] &= ~i_rem;
+        }
+      }
+    }
+    return true;
+  }
+  bool prop_z(void) {
+    // Look at only the changed instances.
+    return Forall_BV(z_change.begin(), z_change.end(),
+                     [this](int i) { return _prop_z(i); });
+  }
+
+  inline bool _prop_idx(int inst_id) {
+    int dtrail_pos = s->persist.data_trail.size();
+    instance& i(instances[inst_id]);
+
+    int base = 0;
+    for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
+      // We need to check all values in z_dom.
+      uint64_t to_check(i.z_dom[b]);
+      uint64_t z_rem(0);
+      bool okay = Forall_Word(base, to_check,
+                              [this, dtrail_pos, inst_id, &i, &z_rem](int c) {
+              if(check_val(i, c))
+                return true;
+              // Otherwise, we need to propagate.
+              i.z_dtrail_pos[c] = dtrail_pos;
+              if(!enqueue(*s, i.z != low + c, expl<&P::ex_z>(cast::conv<int>(attachment(inst_id, c)))))
+                return false;
+              z_rem |= bit(c);
+              return true;
+          });
+      if(!okay) return false;
+      if(z_rem) {
+        trail_save(s->persist, i.z_dom[b], i.z_saved[b]);
+        i.z_dom[b] &= ~z_rem;
+      }
+    }
+    return true;
+  }
+  bool prop_idx(void) {
+    return Forall_BV(idx_change.begin(), idx_change.end(),
+                     [this](int i) { return _prop_idx(i); });
+  }
+
+  bool prop_indices(void) {
+    int dtrail_pos = s->persist.data_trail.size();
+
+    // Only look at the touched values; if z has changed,
+    // we will have dealt with it in prop_z.
+    int base = 0;
+    for(int b = 0; b < req_words(idx_sz); ++b, base += 64) {
+      if(!touched_vars[b]) continue;
+
+      for(int inst_id : irange(instances.size())) {
+        // Now we only care about things that are still in dom(idx).
+        instance& i(instances[inst_id]);
+        uint64_t to_check(i.idx_dom[b] & touched_vars[b]);
+        if(!to_check)
+          continue;
+
+        uint64_t i_rem(0);
+        bool okay = Forall_Word(base, to_check, [this, dtrail_pos, inst_id, &i, &i_rem](int c) {
+            if(check_idx(i, c))
+              return true;
+            // Otherwise, we need to propagate.
+            i.idx_dtrail_pos[c] = dtrail_pos;
+            if(!enqueue(*s, i.idx != c, expl<&P::ex_idx>(cast::conv<int>(attachment(inst_id, c)))))
+              return false;
+            i_rem |= bit(c);
+            return true;
+          });
+        if(!okay) return false;
+        if(i_rem) {
+          trail_save(s->persist, i.idx_dom[b], i.idx_saved[b]);
+          i.idx_dom[b] &= ~i_rem;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  bool prop_vars(void) {
+    int dtrail_pos = s->persist.data_trail.size();
+
+    int base = 0;
+    for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
+      if(!touched_vals[b]) continue;
+
+      for(int inst_id : irange(instances.size())) {
+        instance& i(instances[inst_id]);
+        uint64_t to_check(i.z_dom[b] & touched_vals[b]);
+        if(!to_check) continue;
+
+        uint64_t z_rem(0);
+        bool okay = Forall_Word(base, to_check,
+                                [this, dtrail_pos, inst_id, &i, &z_rem](int c) {
+              if(check_val(i, c))
+                return true;
+              // Otherwise, we need to propagate.
+              i.z_dtrail_pos[c] = dtrail_pos;
+              if(!enqueue(*s, i.z != low + c, expl<&P::ex_z>(cast::conv<int>(attachment(inst_id, c)))))
+                return false;
+              z_rem |= bit(c);
+              return true;
+          });
+        if(!okay) return false;
+        // If there was a change, update the domain of z.
+        if(z_rem) {
+          trail_save(s->persist, i.z_dom[b], i.z_saved[b]);
+          i.z_dom[b] &= ~z_rem;
+        }
+      }
+    }
+    return true;
+  }
+
+  void clear_flags(void) {
+    for(char* c : saved_flags)
+      *c = 0;
+    saved_flags.clear();
+  }
+
+  void cleanup(void) {
+    clear_flags();
+    memset(touched_vars, 0, sizeof(uint64_t) * req_words(idx_sz));
+    memset(touched_vals, 0, sizeof(uint64_t) * req_words(dom_sz));
+    memset(z_change.begin(), 0, sizeof(uint64_t) * z_change.size());
+    memset(idx_change.begin(), 0, sizeof(uint64_t) * idx_change.size());
+    is_queued = false;
+  }
+
+  bool propagate(vec<clause_elt>& confl) {
+    // Iterate over the changed instance-variables.
+    // We do prop_z first, because that can filter out some x-variables.
+    if(!prop_z() || !prop_idx())
+      return false;
+    
+    // Now we check the consequence of updated x-vars, across
+    // all instances.
+    if(!prop_indices())
+      return false;
+
+    if(!prop_vars())
+      return false;
+
+    clear_flags();
+    return true;
+  }
+  
+  ~elem_var_env(void) {
+    delete[] *elt_dom;
+    delete[] *inv_dom;
+    delete[] *elt_saved;
+    delete[] *inv_saved;
+
+    delete[] elt_dom;
+    delete[] inv_dom;
+    delete[] elt_saved;
+    delete[] inv_saved;
+
+    delete[] touched_vars;
+    delete[] touched_vals;
+
+    for(instance& i : instances)
+      i.destroy();
+  }
+
+  int idx_sz;
+  int dom_sz;
+  int low;
+
+  intvar* ys;
+  vec<instance> instances;
+
+  uint64_t** elt_dom;
+  uint64_t** inv_dom;
+
+  uint64_t** elt_dom0;
+  uint64_t** inv_dom0;
+  
+  char** elt_saved;
+  char** inv_saved;
+
+  // Transient state, for changes in xs.
+  uint64_t* touched_vars;
+  uint64_t* touched_vals;
+  vec<uint64_t> z_change; // Which instances had changes in z/idx?
+  vec<uint64_t> idx_change;
+
+  // We store saved-flags here, instead of in s,
+  // because we need to make sure we have access to
+  // intra-propagator checkpoints.
+  vec<char*> saved_flags;
+};
+
+bool elem_var_env::check_sat(ctx_t& ctx) {
+  for(const instance& i : instances) {
+    // Check for some i in dom(idx), where dom(z) cap dom(x[i]) is nonempty.
+    for(int idx : irange(idx_sz)) {
+      if(!i.idx.in_domain_exhaustive(ctx, idx))
+        continue;
+
+      for(int c = low; c < low + dom_sz; ++c) {
+        if(i.z.in_domain_exhaustive(ctx, c)
+           && ys[idx].in_domain_exhaustive(ctx, c))
+          goto support_found;
+      }
+    }
+    return false;
+  support_found:
+    continue;
+  }
+  return true;
+}
+
+bool elem_var_env::check_unsat(ctx_t& ctx) {
+  return !check_sat(ctx);
+}
+
+// Manages instances 
+struct elem_env_man : public solver_ext<elem_env_man> {
+  struct key {
+    int sz;
+    intvar* xs;
+  };
+
+  struct CmpKey {
+    bool operator()(const key& a, const key& b) const {
+      if(a.sz != b.sz)
+        return false;
+      for(int ii = 0; ii < a.sz; ++ii) {
+        if(a.xs[ii].p != b.xs[ii].p)
+          return false;
+        if(a.xs[ii].off != b.xs[ii].off)
+          return false;
+      }
+      return true;
+    }
+  };
+  struct HashKey {
+    size_t operator()(const key& a) const {
+      unsigned long hash = 5381;
+      hash = ((hash<<5) + hash) + a.sz;
+      for(int ii = 0; ii < a.sz; ++ii) {
+        hash = ((hash<<5) + hash) + a.xs[ii].p;
+        hash = ((hash<<5) + hash) + a.xs[ii].off;
+      }
+      return hash;
+    }
+  };
+
+  elem_env_man(solver_data* _s) { }
+
+  elem_var_env* find_element(solver_data* s, vec<intvar>& xs) {
+    key k = { xs.size(), xs.begin() };
+    auto it(map.find(k));
+    if(it != map.end())
+      return (*it).second;
+
+    // Otherwise, we need to create it.
+    elem_var_env* elt = new elem_var_env(s, xs);
+    map.insert(std::make_pair(key { xs.size(), elt->ys }, elt));
+    return elt;
+  }
+
+  std::unordered_map<key, elem_var_env*, HashKey, CmpKey> map;
+};
+  
 class elem_var_dom : public propagator, public prop_inst<elem_var_dom> {
   bool _prop_val(int v);
   inline bool prop_val(int v) {
@@ -1220,18 +2080,6 @@ class elem_var_dom : public propagator, public prop_inst<elem_var_dom> {
   }
 
 public:
-  inline int get_dom_min(const vec<intvar>& xs) {
-    int low(xs[0].lb(s));
-    for(const intvar& x : range(xs.begin()+1, xs.end()))
-      low = std::min(low, (int) x.lb(s));
-    return low;
-  }
-  inline int get_dom_max(const vec<intvar>& xs) {
-    int high(xs[0].ub(s));
-    for(const intvar& x : range(xs.begin()+1, xs.end()))
-      high = std::max(high, (int) x.ub(s));
-    return high;
-  }
 
   template<class T>
   static T* alloc(int sz) {
@@ -1246,8 +2094,8 @@ public:
     , z(_z)
     , idx(_x)
     , ys(_ys)
-    , low(get_dom_min(_ys))
-    , dom_sz(get_dom_max(_ys) - low + 1)
+    , low(get_dom_min(s, _ys))
+    , dom_sz(get_dom_max(s, _ys) - low + 1)
     , idx_sz(_ys._size())
     , is_fixed(false)
     , fixed_idx(0)
@@ -1272,6 +2120,8 @@ public:
     make_eager(z);
     make_eager(idx);
 
+    idx.attach(E_FIX, watch<&P::wake_fix>(0));
+
     int val = low;
     for(int ii = 0; ii < dom_sz; ++ii, ++val) {
       inv_dom.push(alloc<uint64_t>(idx_sz));
@@ -1279,8 +2129,8 @@ public:
       inv_saved.push(alloc<char>(idx_sz));
 
       if(z.in_domain(s->ctx(), val)) {
-        z_dom[block(val)] |= bit(val);
-        z_dom0[block(val)] |= bit(val);
+        z_dom[block(ii)] |= bit(ii);
+        z_dom0[block(ii)] |= bit(ii);
 
         attach(s, z != val, watch<&P::wake_z>(ii));
       }
@@ -1351,9 +2201,26 @@ public:
     delete[] touched_vals;
   }
    
+  bool check_sat(ctx_t& ctx) {
+    for(int ii = 0; ii < ys.size(); ++ii) {
+      if(!idx.in_domain_exhaustive(ctx, ii))
+        continue;
+
+      for(int val = low; val < low + dom_sz; ++val) {
+        if(z.in_domain_exhaustive(ctx, val)
+           && ys[ii].in_domain_exhaustive(ctx, val))
+          return true;
+      }
+    }
+    return false;
+  }
+  bool check_unsat(ctx_t& ctx) {
+    return !check_sat(ctx);
+  }
+  
   bool propagate(vec<clause_elt>& confl) {
     if(is_fixed) {
-      if(prop_domain())
+      if(!prop_domain())
         return false;
     } else {
       if(!Forall_BV(touched_vars, touched_vars + req_words(idx_sz),
@@ -1454,6 +2321,7 @@ bool elem_var_dom::prop_domain(void) {
       trail_save(s->persist, x_dom[b], x_saved[b]);
       x_dom[b] &= ~z_dom[b];
     }
+    base += 64;
   }
   return true;
 }
@@ -1736,7 +2604,13 @@ bool var_int_element(solver_data* s, intvar z, intvar x, vec<intvar>& ys, patom_
 #else
   // return elem_var_bnd::post(s, z, x, ys, 1, r);
   assert(r.lb(s->ctx()));
+  #if 0
   return elem_var_dom::post(s, z, x-1, ys);
+  #else
+  elem_env_man* man(elem_env_man::get(s));
+  elem_var_env* env(man->find_element(s, ys));
+  return env->attach_instance(x-1, z);
+  #endif
 #endif
 }
 }
