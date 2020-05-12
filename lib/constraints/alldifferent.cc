@@ -1413,6 +1413,8 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
   }
   bool strongconnect(int x);
   bool strongconnect(int x, int& begin);
+  bool trim_unmatched(int& begin, int end);
+
   bool trim_sccs(void) {
     // FIXME: Avoid initialization.
     for(int ii : irange(sz)) 
@@ -1443,6 +1445,11 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
   }
   // For now, just use standard Tarjan stuff.
   bool trim_scc(int scc_begin, int scc_end) {
+    // First, mark any reachable unmatched values.
+    if(!trim_unmatched(scc_begin, scc_end))
+      return true;
+
+
     while(scc_begin < scc_end) {
       // No vertex should have been touched.
       assert(!dfs_num[sccs[scc_begin]]);
@@ -1505,6 +1512,105 @@ class alldiff_dc : public propagator, public prop_inst<alldiff_dc> {
     char exs_saved;
 };
 
+bool alldiff_dc::trim_unmatched(int& scc_begin, int scc_end) {
+  int* var_tl = match_queue;
+  for(int b = 0; b < req_words(dom_sz); ++b) {
+    // Iterate over b, in case there are no unmatched
+    // values.
+    uint64_t unmatched_b(unmatched[b]);
+    if(!unmatched_b) continue;
+      
+    for(int v : range(&sccs[scc_begin], &sccs[scc_end])) {
+      if(rseen[block(v)] & bit(v)) continue;
+      if(dom[v][b] & unmatched_b) {
+        rseen[block(v)] |= bit(v);
+        *var_tl = v; ++var_tl;
+      }
+    }
+  }
+  // If nothing reached an unmatched value, don't do anything.
+  if(var_tl == match_queue) return true;
+
+  int* var_hd = match_queue;
+  for(; var_hd != var_tl; ++var_hd) {
+    int v = *var_hd;
+    int c = match[v];
+
+    // Enqueue anything unseen in inv_dom[c].
+    int base = 0;
+    uint64_t* c_inv(inv_dom[c]);
+    for(int b = 0; b < req_words(sz); ++b) {
+      uint64_t word(c_inv[b] & ~rseen[b]);
+      if(word) {
+        Iter_Word(base, word, [this, &var_tl](int u) {
+            *var_tl = u; ++var_tl;
+          });
+        rseen[b] |= c_inv[b];
+      }
+    }
+  }
+  int scc_sz = var_tl - match_queue;
+  if(scc_sz == scc_end - scc_begin) {
+    scc_begin = scc_end;
+    memset(rseen, 0, sizeof(uint64_t) * req_words(sz));
+    return true;
+  }
+
+  // At this point, we've got everything which can reach unmatched
+  // values. Everything else must be in a different SCC.
+  int end = scc_begin + scc_sz;
+  trail_change(s->persist, scc_root[scc_begin], end);
+
+  int idx = scc_begin;
+  for(int v : range(match_queue, var_tl)) {
+    int c = match[v];
+    seen[block(c)] |= bit(c);
+
+    // Update sccs[] and scc_index[] arrays.
+    int rep = sccs[idx];
+    int rpos = scc_idx[v];
+    sccs[idx] = v;
+    sccs[rpos] = rep;
+    scc_idx[v] = idx;
+    scc_idx[rep] = rpos;
+    ++idx;
+  }
+
+  // Now trim the domains.
+  // This is a bit trickier than the normal (SCC) case, because scc_root[] might not have
+  // been set for some reachable values.
+  for(unsigned b = 0; b < req_words(dom_sz); ++b) {
+    uint64_t forbidden = ~(seen[b] | unmatched[b]);
+
+    for(int z : range(match_queue, var_tl)) {
+      uint64_t to_remove(dom[z][b] & forbidden);
+
+      if(to_remove) {
+        // Still remove match[z] from dom, even if we're not enqueueing it.
+        trail_save(s->persist, dom[z][b], dom_saved[z][b]);
+        dom[z][b] &= ~forbidden;
+        if(!Forall_Word((b << block_bits()), to_remove, [this,scc_begin,scc_end,end,z](int v) {
+              ex_info ex(end, scc_end);
+              if(scc_root[scc_idx[inv_match[v]]] != scc_begin) {
+                int rbegin(find_scc_begin(inv_match[v]));
+                ex = ex_info(rbegin, scc_root[rbegin]);
+              }
+              return enqueue(*s, xs[z] != v+low, expl<&P::ex_rem>(cast::conv<int>(ex)));
+            })) {
+          // Cleanup seen and rseen.
+          memset(rseen, 0, sizeof(uint64_t) * req_words(sz));
+          memset(seen, 0, sizeof(uint64_t) * req_words(dom_sz));
+          return false;
+        }
+      }
+    }
+  }
+  memset(rseen, 0, sizeof(uint64_t) * req_words(sz));
+  memset(seen, 0, sizeof(uint64_t) * req_words(dom_sz));
+  scc_begin = end;
+  return true;
+}
+
 bool alldiff_dc::strongconnect(int x, int& begin) {
   lowlink[x] = dfs_num[x] = ++dfs_count;
   *stack_tl = x; ++stack_tl;
@@ -1513,6 +1619,7 @@ bool alldiff_dc::strongconnect(int x, int& begin) {
   int x_match(match[x]);
   bool okay = Forall_BV(dom[x], dom[x] + req_words(dom_sz), [this, x, x_match, &begin](int c) {
       if(c != x_match) { // Do we need this check?
+        // Should have already run 
         assert(! (unmatched[block(c)] & bit(c)) );
 
         int y(inv_match[c]);
@@ -1626,7 +1733,8 @@ bool all_different_int(solver_data* s, const vec<intvar>& xs, patom_t r = at_Tru
     return alldiff_dc::post(s, xs);
     // return alldiff_b::post(s, xs);
   } else {
-    return alldiff_b::post(s, xs);
+    return alldiff_dc::post(s, xs);
+    // return alldiff_b::post(s, xs);
   }
   // return alldiff_v::post(s, xs);
 }
