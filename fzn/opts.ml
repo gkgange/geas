@@ -194,4 +194,9 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
       Arg.Int (fun t -> limits := {!limits with Solver.max_time = float_of_int t }),
       "<int> : maximum time (in seconds)"
      );
+     (
+      "-t",
+      Arg.Int (fun t -> limits := {!limits with Solver.max_time = (float_of_int t) /. 1000. }),
+      "<int> : maximum time (in millisecond)"
+     );
     ]
