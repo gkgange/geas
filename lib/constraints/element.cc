@@ -180,25 +180,35 @@ static T* alloc(int sz) {
 }
 
 
-#if 0
 class int_elem_bv : public propagator, public prop_inst<int_elem_bv> {
+  inline static bool in_dom(uint64_t* mem, int val) {
+    return mem[block(val)] & bit(val);
+  }
+  inline void rem(uint64_t* mem, char* saved, int val) {
+    trail_save(s->persist, mem[block(val)], saved[block(val)]);
+    mem[block(val)] &= ~bit(val);
+  }
   watch_result wake_x(int xi) {
-    if(!in_dom(idx_dom, xi))
+    if(!in_dom(idx_dom, xi) || !in_dom(z_dom, idx_row[xi]))
       return Wt_Keep;
-    rem(idx_dom, idx_saved, xi);
 
-    int ri = x_row[xi];
+    rem(idx_dom, idx_saved, xi);
+    int ri = idx_row[xi];
     int b = z_residue[ri];
 
+    // Check whether z still has some support.
     if(! (z_supp[ri][b] & idx_dom[b]) ) {
-      *z_check_tl = ri;
-      ++z_check_tl;
+      z_check[block(ri)] |= bit(ri);
       queue_prop();
     }
     return Wt_Keep;
   }
 
   watch_result wake_z(int ri) {
+    if(!in_dom(z_dom, ri))
+      return Wt_Keep;
+
+    rem(z_dom, z_saved, ri);
     *z_elim_tl = ri;
     ++z_elim_tl;
 
@@ -210,19 +220,18 @@ class int_elem_bv : public propagator, public prop_inst<int_elem_bv> {
     // z != ri, because all supports of ri were removed.
     int base(0);
     uint64_t* supp(z_supp[ri]);
-    for(int b = 0; b < req_words(idx_sz); ++b) {
+    for(int b = 0; b < req_words(idx_sz); ++b, base += 64) {
       Iter_Word(base, supp[b], [this, &expl](int c) {
-          EX_PUSH(idx == c);
+          EX_PUSH(expl, x == c);
         });
-      base += 64;
     }
   }
 
 public:  
   int_elem_bv(solver_data* s, intvar _z, vec<int>& ys, intvar _x)
     : propagator(s)
-    , idx_sz(_ys.size())
-    , rows_sz(0)
+    , idx_sz(ys.size())
+    , dom_sz(0)
     , z(_z), x(_x)
     , idx_dom(alloc<uint64_t>(idx_sz))
     , idx_saved(alloc<char>(idx_sz))
@@ -241,58 +250,120 @@ public:
     // Compute the set of feasible z-values, and the
     // corresponding row IDs.
     vec<int> row_vals;
-    int rv = vals[idx_perm[0]];
+    int rv = ys[idx_perm[0]];
     uint64_t* r_supp = alloc<uint64_t>(idx_sz);
     idx_row[idx_perm[0]] = 0;
     r_supp[block(idx_perm[0])] |= bit(idx_perm[0]);
 
     for(int ii : idx_perm.tail()) {
-      if(vals[ii] != rv) {
+      if(ys[ii] != rv) {
         row_vals.push(rv);
         z_supp.push(r_supp);
-        z_saved.push(alloc<char>(idx_sz));
-
-        rv = vals[ii];
-        r_supp[block(ii)] |= bit(ii);
+        r_supp = alloc<uint64_t>(idx_sz);
+        rv = ys[ii];
       }
+      r_supp[block(ii)] |= bit(ii);
       idx_row[ii] = row_vals.size();
     }
     row_vals.push(rv);
     z_supp.push(r_supp);
-    z_saved.push(alloc<char>(idx_sz));
 
-    // 
+    dom_sz = row_vals.size();
+    z_check = alloc<uint64_t>(dom_sz);
+    z_elim = new int[dom_sz];
+    z_elim_tl = z_elim;
+
+    z_dom = alloc<uint64_t>(dom_sz);
+    z_saved = alloc<char>(dom_sz);
+    z_residue = alloc_words<int>(dom_sz);
+    
+    row_val = new int[dom_sz];
+    for(int ri : irange(dom_sz))
+      row_val[ri] = row_vals[ri];
+
+    make_eager(x);
+    make_sparse(z, row_vals);
+    
+    row_atom = new patom_t[dom_sz];
+    for(int ri : irange(dom_sz)) {
+      patom_t z_at = (z != row_vals[ri]);
+      row_atom[ri] = z_at;
+      if(z.in_domain(s->ctx(), row_vals[ri])) {
+        z_dom[block(ri)] |= bit(ri);
+        attach(s, z_at, watch<&P::wake_z>(ri));
+      }
+    }
+
+    for(int ii : irange(idx_sz)) {
+      // Now do some pruning.
+      if(!x.in_domain(s->ctx(), ii))
+        continue;
+      int rv = row_vals[idx_row[ii]];
+      if(!z.in_domain(s->ctx(), rv)) {
+        if(!enqueue(*s, x != ii, reason()))
+          throw RootFail {};
+        continue;
+      }
+      // Otherwise, watch changes to x.
+      idx_dom[block(ii)] |= bit(ii);
+      attach(s, x != ii, watch<&P::wake_x>(ii));
+    }
   }
 
-  inline bool prop_row(int ri) {
-    // Check if there is still some support.
-    uint64_t* supp(z_supp[ri]);
-    for(int b = 0; b < req_words(idx_sz); b++) {
-      if(supp[b] & idx_dom[b]) {
+  ~int_elem_bv(void) {
+    // Delete a billion arrays.
+    // TODO: Should really just compute the required size, and allocate that upfront.
+    delete[] row_atom;
+    delete[] idx_row;
+    delete[] row_val;
+
+    delete[] z_dom;
+    delete[] idx_dom;
+    delete[] z_saved;
+    delete[] idx_saved;
+    for(uint64_t* s : z_supp)
+      delete[] s;
+    delete[] z_residue;
+    delete[] z_elim;
+    delete[] z_check;
+  }
+
+  // Check whether a given value has a remaining support.
+  inline bool check_row(int ri) {
+    uint64_t* r_supp(z_supp[ri]);
+    for(int b = 0; b < req_words(idx_sz); ++b) {
+      if(r_supp[b] & idx_dom[b]) {
         z_residue[ri] = b;
         return true;
       }
     }
-    return enqueue(*s, z != row_val[ri], expl<&P::ex_z>(ri));
+    return false;
   }
 
   bool propagate(vec<clause_elt>& confl) {
-    for(int ri : range(z_check, z_check_tl)) {
-      if(!prop_row(ri))
-        return false;
+    int base = 0;
+    for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
+      bool okay = Forall_Word(base, z_check[b], [this](int ri) {
+        if(!check_row(ri) &&
+          !enqueue(*s, row_atom[ri], expl<&P::ex_z>(ri)))
+          return false;
+        rem(z_dom, z_saved, ri);
+        return true;
+      });
+      if(!okay) return false;
     }
 
     // Zero out any rows corresponding to ri.
     for(int ri : range(z_elim, z_elim_tl)) {
       uint64_t* supp(z_supp[ri]);
+      patom_t r(~row_atom[ri]);
 
       int base = 0;
       for(int b = 0; b < req_words(idx_sz); ++b) {
         uint64_t word(idx_dom[b] & supp[b]);
         if(word) {
-          patom_t r(row_atom[ri]);
           if(!Forall_Word(base, word, [this, r](int c) {
-                return enqueue(*s, idx != c, r);
+                return enqueue(*s, x != c, r);
               }))
             return false;
           // Probably not necessary, so long as idempotence is
@@ -309,27 +380,34 @@ public:
 
   void cleanup(void) {
     is_queued = false;
-    z_check_tl = z_queue;
     z_elim_tl = z_elim;
+    memset(z_check, 0, sizeof(uint64_t) * req_words(dom_sz));
   }
+
+  int dom_sz;
+  int idx_sz;
 
   intvar z;
   intvar x;
-
+ 
   patom_t* row_atom; // z_row -> atom
-  int* x_row; // i -> z_row
+  int* idx_row; // i -> z_row
+  int* row_val; // z_row -> int
 
   // Persistent state
-  int64_t* x_dom; // set(i)
-  vec<int64_t*> z_supp; // z_row -> set(i)
+  uint64_t* z_dom;
+  uint64_t* idx_dom; // set(i)
+  char* z_saved;
+  char* idx_saved;
+  vec<uint64_t*> z_supp; // z_row -> set(i)
 
   int* z_residue; // r -> block
   
   // Transient state
-  int* z_queue;
-  int* z_queue_tl;
+  int* z_elim; // Which rows are definitely dead?
+  int* z_elim_tl;
+  uint64_t* z_check; // Which rows need checking?
 };
-#endif
 
 class int_elem_bnd : public propagator, public prop_inst<int_elem_bnd> {
   static int prop_count;
@@ -2494,7 +2572,8 @@ support_found:
 #endif
 int int_elem_bnd::prop_count = 0;
 
-enum { ELEM_DOM_MAX = 50 };
+// enum { ELEM_DOM_MAX = 50 };
+enum { ELEM_DOM_MAX = 1000 };
 // enum { ELEM_DOM_MAX = 20 };
 // enum { ELEM_DOM_MAX = 0 };
 bool int_element(solver_data* s, intvar z, intvar x, vec<int>& ys, patom_t r) {
@@ -2503,7 +2582,8 @@ bool int_element(solver_data* s, intvar z, intvar x, vec<int>& ys, patom_t r) {
 //    assert(s->state.is_entailed(r));
 //    new int_elem_dom(s, x, ys, z-1);
 //    return true;
-    return int_element(s, r, z, x, ys, 1);
+    // return int_element(s, r, z, x, ys, 1);
+    return int_elem_bv::post(s, z, ys, x-1);
   } else {
     // new int_elem_bnd(s, r, z, x-1, ys);
     // return true;
