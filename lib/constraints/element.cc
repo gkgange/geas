@@ -190,7 +190,7 @@ class int_elem_bv : public propagator, public prop_inst<int_elem_bv> {
   }
   watch_result wake_x(int xi) {
     if(!in_dom(idx_dom, xi) || !in_dom(z_dom, idx_row[xi]))
-      return Wt_Keep;
+       return Wt_Keep;
 
     rem(idx_dom, idx_saved, xi);
     int ri = idx_row[xi];
@@ -252,15 +252,16 @@ public:
     vec<int> row_vals;
     int rv = ys[idx_perm[0]];
     uint64_t* r_supp = alloc<uint64_t>(idx_sz);
-    idx_row[idx_perm[0]] = 0;
     r_supp[block(idx_perm[0])] |= bit(idx_perm[0]);
+    idx_row[idx_perm[0]] = 0;
 
     for(int ii : idx_perm.tail()) {
       if(ys[ii] != rv) {
         row_vals.push(rv);
         z_supp.push(r_supp);
-        r_supp = alloc<uint64_t>(idx_sz);
+
         rv = ys[ii];
+        r_supp = alloc<uint64_t>(idx_sz);
       }
       r_supp[block(ii)] |= bit(ii);
       idx_row[ii] = row_vals.size();
@@ -291,6 +292,7 @@ public:
       if(z.in_domain(s->ctx(), row_vals[ri])) {
         z_dom[block(ri)] |= bit(ri);
         attach(s, z_at, watch<&P::wake_z>(ri));
+        z_check[block(ri)] |= bit(ri);
       }
     }
 
@@ -310,6 +312,20 @@ public:
     }
   }
 
+  bool check_sat(ctx_t& ctx) {
+    for(int ii : irange(idx_sz)) {
+      if(!x.in_domain_exhaustive(ctx, ii))
+        continue;
+      int rv = row_val[idx_row[ii]];
+      if(!z.in_domain_exhaustive(ctx, rv))
+        continue;
+      return true;
+    }
+    return false;
+  }
+
+  bool check_unsat(ctx_t& ctx) { return !check_sat(ctx); }
+ 
   ~int_elem_bv(void) {
     // Delete a billion arrays.
     // TODO: Should really just compute the required size, and allocate that upfront.
@@ -344,8 +360,8 @@ public:
     int base = 0;
     for(int b = 0; b < req_words(dom_sz); ++b, base += 64) {
       bool okay = Forall_Word(base, z_check[b], [this](int ri) {
-        if(!check_row(ri) &&
-          !enqueue(*s, row_atom[ri], expl<&P::ex_z>(ri)))
+        if(check_row(ri)) return true;
+        if(!enqueue(*s, row_atom[ri], expl<&P::ex_z>(ri)))
           return false;
         rem(z_dom, z_saved, ri);
         return true;
@@ -359,7 +375,7 @@ public:
       patom_t r(~row_atom[ri]);
 
       int base = 0;
-      for(int b = 0; b < req_words(idx_sz); ++b) {
+      for(int b = 0; b < req_words(idx_sz); ++b, base += 64) {
         uint64_t word(idx_dom[b] & supp[b]);
         if(word) {
           if(!Forall_Word(base, word, [this, r](int c) {
@@ -371,7 +387,6 @@ public:
           trail_save(s->persist, idx_dom[b], idx_saved[b]);
           idx_dom[b] &= ~supp[b];
         }
-        base += 64;
       }
     }
 
