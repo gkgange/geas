@@ -1071,7 +1071,7 @@ let solve_with_assumptions solver assumps limits =
 let shrink_core solver core step_limit =
   let rec aux pending acc =
     match pending with
-      | [] -> List.rev acc |> Array.of_list
+      | [] -> List.rev acc |> List.map At.neg |> Array.of_list
       | at :: rest ->
         begin
           match solve_with_assumptions solver (List.rev_append acc rest) step_limit with
@@ -1079,7 +1079,7 @@ let shrink_core solver core step_limit =
           | _ -> aux rest (at :: acc)
         end
   in
-  aux (Array.to_list core) []
+  aux (Array.to_list core |> List.map At.neg) []
 
 
  (* Alternate reinterpretation of core-guided optimisation for integers.
@@ -1408,8 +1408,8 @@ end = struct
          end
       | UNSAT core_ ->
          begin
-           (* let core = shrink_core solver core_ { (Sol.unlimited ()) with Sol.max_conflicts = 50 } in *)
-           let core = core_ in
+           let core = shrink_core solver core_ { (Sol.unlimited ()) with Sol.max_conflicts = 50 } in 
+           (* let core = core_ in *)
            if Array.length core > 0 then
              begin
               let core' =
