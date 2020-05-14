@@ -382,15 +382,17 @@ let solve_satisfy print_model print_nogood solver assumps =
     end
   else
     match Sol.solve solver !Opts.limits with
-    | Sol.UNKNOWN -> Format.fprintf fmt "UNKNOWN@."
+    | Sol.UNKNOWN -> Format.fprintf fmt "=====UNKNOWN=====@."
     | Sol.UNSAT ->
       begin
         if List.length assumps > 0 then
           let nogood = Sol.get_conflict solver in
           print_nogood fmt nogood
       end ; 
+      Format.fprintf fmt "=====UNSATISFIABLE=====@."
+    | Sol.SAT ->
+      print_model fmt (Sol.get_model solver) ;
       Format.fprintf fmt "==========@."
-    | Sol.SAT -> print_model fmt (Sol.get_model solver)
 
 let solve_findall print_model print_nogood block_solution solver assumps =
   let fmt = Format.std_formatter in
@@ -521,7 +523,7 @@ let solve_minimize overall_limits print_model print_nogood solver obj assumps =
             if !Opts.max_solutions > 0 then
               print_model fmt model
             end ;
-          Format.fprintf fmt "INCOMPLETE@." ;
+          Format.fprintf fmt "%%%% INCOMPLETE@." ;
           model)
       | Sol.UNSAT ->
          ((* print_model fmt model ; *)
@@ -542,10 +544,10 @@ let solve_minimize overall_limits print_model print_nogood solver obj assumps =
         (* *)
   in
   match Sol.solve solver (limits ()) with
-  | Sol.UNKNOWN -> (Format.fprintf fmt "UNKNOWN@." ; None)
+  | Sol.UNKNOWN -> (Format.fprintf fmt "=====UNKNOWN=====@." ; None)
   | Sol.UNSAT ->
     (* Format.fprintf fmt "UNSAT@." *)
-    (Format.fprintf fmt "==========@." ; None)
+    (Format.fprintf fmt "=====UNSATISFIABLE=====@." ; None)
   | Sol.SAT ->
     (* Some (aux (Sol.get_model solver)) *)
     let m = Sol.get_model solver in
@@ -1624,7 +1626,7 @@ let minimize_uc print_model print_nogood get_ivar_name print_penalty solver obj 
         | _ -> failwith "Internal error: got Unsat or Unknown, even though we already have a model."
       end
     | Sol.UNSAT -> 
-        Format.fprintf fmt "==========@." ;
+        Format.fprintf fmt "=====UNSATISFIABLE=====@." ;
         None
     | Sol.UNKNOWN -> None
 
@@ -1846,7 +1848,7 @@ let main () =
   with Pr.Root_failure ->
     let fmt = Format.err_formatter in
     Format.fprintf fmt "%%%% Model inconsistency detected.@." ;
-    Format.fprintf fmt "==========@." ;
+    Format.fprintf fmt "=====UNSATISFIABLE=====@." ;
     print_stats fmt (Sol.get_statistics solver) None
 
 let _ = main ()
