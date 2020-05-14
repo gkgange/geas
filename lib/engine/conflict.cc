@@ -361,7 +361,7 @@ static forceinline void add_reason(solver_data* s, unsigned int pos, pval_t ex_v
             GEAS_NOT_YET;
           }
         }
-        vec<clause_elt> es;
+        vec<clause_elt>& es(s->confl.expl_buf); es.clear();
         r.eth(ex_val, es);
 #ifdef CHECK_PRED_EVALS
         for(pid_t p : s->confl.pred_seen)
@@ -440,7 +440,7 @@ static forceinline bool is_redundant(solver_data* s, reason r) {
           // don't.
           return false;
         }
-        vec<clause_elt> es;
+        vec<clause_elt>& es(s->confl.expl_buf); es.clear();
         pval_t ex_val(s->confl.pred_eval[e.pid]);
         r.eth(ex_val, es);
         for(clause_elt e : es) {
@@ -797,7 +797,7 @@ static inline void aconfl_add_reason(solver_data* s, unsigned int pos, pval_t ex
             GEAS_NOT_YET;
           }
         }
-        vec<clause_elt> es;
+        vec<clause_elt>& es(s->confl.expl_buf); es.clear();
         r.eth(ex_val, es);
 #ifdef CHECK_EXPLNS
         if(r.eth.origin) {

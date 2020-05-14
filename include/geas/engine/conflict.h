@@ -49,6 +49,8 @@ public:
   
   vec<phase> pred_saved;
 
+  vec<clause_elt> expl_buf;
+  
   // Atoms at the current level
   int clevel;
   unsigned int confl_num;
