@@ -156,6 +156,7 @@ int int_element(solver s, atom r, intvar z, intvar x, int* elts, int sz) {
                         *get_intvar(z), *get_intvar(x), p_elts, get_atom(r));
 }
 
+
 int var_int_element(solver s, atom r, intvar z, intvar x, intvar* elts, int sz) {
   vec<geas::intvar> p_elts;
   for(intvar* v = elts; v != elts+sz; ++v) {

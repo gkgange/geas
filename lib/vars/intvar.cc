@@ -134,9 +134,12 @@ static watch_result wakeup_rem(void* ptr, int idx) {
 }
 
 intvar_manager::intvar_manager(solver_data* _s)
-  : s(_s) { }
+  : s(_s), zero(nullptr) { }
      
 intvar intvar_manager::new_var(val_t lb, val_t ub) {
+  if(lb == ub && zero)
+    return (*zero) + lb;
+
   int idx = var_preds.size();
   pid_t p = new_pred(*s, from_int(lb), from_int(ub));
   var_preds.push(p);
@@ -152,7 +155,14 @@ intvar intvar_manager::new_var(val_t lb, val_t ub) {
   // Set bounds
   intvar v(p, 0, ext);
 
+  if(lb == ub)
+    zero = new intvar(v - lb);
+
   return v;
+}
+
+intvar_manager::~intvar_manager(void) {
+  if(zero) delete zero;
 }
 
 #if 0

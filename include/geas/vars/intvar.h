@@ -279,12 +279,15 @@ public:
 
 
   intvar_manager(solver_data* _s);
+  ~intvar_manager(void);
   intvar new_var(val_t lb, val_t ub);
 
   vec<pid_t> var_preds;
 
   solver_data* s;
   vec<ivar_ext*> var_exts;
+
+  intvar* zero;
 };
 
 // inline patom_t intvar_base::operator==(int64_t v) {
