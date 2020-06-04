@@ -2702,6 +2702,12 @@ bool var_int_element(solver_data* s, intvar z, intvar x, vec<intvar>& ys, patom_
   #if 0
   return elem_var_dom::post(s, z, x-1, ys);
   #else
+  // elem_var_env is currently only safe if the domain size is < 2^15.
+  // Probably shouldn't use the domain consistent one anyway if it's more than a couple hundred.
+  // Also unsafe if ys is at least 2^15. But then you've already got problems.
+  if(ys.size() >= 1<<15 || z.dom_sz_approx(s->state.p_vals) > 1000)
+    return elem_var_bnd::post(s, z, x, ys, 1, r);
+
   elem_env_man* man(elem_env_man::get(s));
   elem_var_env* env(man->find_element(s, ys));
   return env->attach_instance(x-1, z);
