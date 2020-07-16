@@ -192,6 +192,7 @@ let build_idef s make_ivar make_bvar dom ctx def =
       (* Format.fprintf Format.err_formatter "[.] := -[%d] + %d@." x k ; *)
       let _ = prune_intvar s x' (Dom.neg (Dom.add dom (-k))) in
       Sol.intvar_plus (Sol.intvar_neg x') k
+    | Simp.Iv_const k -> make_intvar s (Dom.range k k)
     | _ -> make_intvar s dom in
   let _ = match Simp.map_idef make_bvar make_ivar def with
     (* Should instead resolve const references *)
