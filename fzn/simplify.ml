@@ -62,6 +62,13 @@ let negate_idef = function
   | Iv_lin (ts, k) -> Some (Iv_lin (Array.map (fun (k, x) -> (-k, x)) ts, -k))
   | _ -> None
 
+let negatable_idef = function
+  | Iv_const _
+    | Iv_eq _
+    | Iv_opp _
+    | Iv_lin _ -> true
+  | _ -> false
+       
 type ('b, 'i) bdef =
   | Bv_none
   | Bv_const of bool
@@ -91,6 +98,17 @@ let negate_bdef = function
   | At (x, r, k) -> Some (At (x, negate_rel r, k))
   | _ -> None
 
+let negatable_bdef = function
+  | Bv_const _
+    | Bv_eq _
+    | Bv_neg _
+    | At _ -> true
+  | _ -> false
+
+let force_option = function
+  | Some x -> x
+  | None -> failwith "Error: called force_option on None"
+          
 let apply_snd f (a, b) = (a, f b)
 
 let map_idef fb fi def =
@@ -220,6 +238,23 @@ and irepr st v =
     (st.idefs.(v) <- idef_of_rep d ; d)
   | _ -> Pos v
 
+let irepr_eq st v =
+  let rec aux v =
+    match st.idefs.(v) with
+    | Iv_eq p ->
+      let u = aux p in
+      (st.idefs.(v) <- Iv_eq u ; u)
+    | _ -> v
+  in aux v
+let brepr_eq st v =
+  let rec aux v =
+    match st.bdefs.(v) with
+    | Bv_eq p ->
+      let u = aux p in
+      (st.bdefs.(v) <- Bv_eq u ; u)
+    | _ -> v
+  in aux v
+    
 let to_bvars xs = Pr.Arr (Array.map (fun y -> Pr.Bvar y) xs)
 let to_ivars xs = Pr.Arr (Array.map (fun y -> Pr.Ivar y) xs)
 
@@ -248,7 +283,7 @@ let fzn_assert_ieq st x def =
     (("int_lin_eq",
       [| Pr.Arr (Array.append [|Pr.Ilit (-1)|] (Array.map (fun (c, _) -> Pr.Ilit c) ts)) ;
          Pr.Arr (Array.append [|Pr.Ivar x|] (Array.map (fun (_, y) -> Pr.Ivar y)  ts)) ;
-          Pr.Ilit k |]), [])
+          Pr.Ilit (-k) |]), [])
   | Iv_prod xs -> failwith "FIXME"
   | Iv_max xs -> (("array_int_maximum", [| Pr.Ivar x; to_ivars xs |]), [])
   | Iv_min xs -> (("array_int_minimum", [| Pr.Ivar x; to_ivars xs |]), [])
@@ -263,97 +298,95 @@ let evict_bdef st invert x y =
   (st.bdefs.(y) <- beq_def st invert x ;
    fzn_assert_beq st y ry)
  
-let rec resolve_bdefs st v d d' = 
-  (*
-  match d, d' with
-  | Bv_none, d
-  | d, Bv_none -> Format.fprintf Format.err_formatter "%d : A (%s)@." v (string_of_bdefn d)
-  | _, _ -> Format.fprintf Format.err_formatter "%d : B@." v ;
-  *)
-  match d, d' with
-  (* No conflict *)
-  | Bv_none, def
-  | def, Bv_none -> st.bdefs.(v) <- def
-  (* Aliasing *)
-  | Bv_eq v', def
-  | def, Bv_eq v' ->
-    if v = v' then
-      st.bdefs.(v) <- def
-    else
-      (st.bdefs.(v) <- Bv_eq v' ;
-       resolve_bdefs st v st.bdefs.(v') def)
-  | Bv_neg v', def
-  | def, Bv_neg v' -> 
-    if v = v' then 
-      (* failwith "Top-level failure: x = ~x (var)." *)
-      raise Pr.Root_failure
-    else
-      begin match negate_bdef def with
-        | Some def' ->
-          (st.bdefs.(v) <- Bv_neg v' ;
-           resolve_bdefs st v st.bdefs.(v') def')
-        | None -> fzn_assert_beq st v def
-      end
-  (* First priority to constants *)
-  | Bv_const b, Bv_const b' ->
-    if b <> b' then
-      (* failwith "Top-level failure: x = ~x (const)" *)
-      raise Pr.Root_failure
-    else
-      st.bdefs.(v) <- Bv_const b
-  | ((Bv_const _) as d1), d2 
-  | d2, ((Bv_const _) as d1)
-  (* Then atoms *)
-  | ((At _) as d1), d2
-  | d2, ((At _) as d1)
-  (* Then whatever *)
-  | d1, d2 ->
-    (st.bdefs.(v) <- d1 ; fzn_assert_beq st v d2)
+let rec apply_bdef st v0 d =
+  let v = brepr_eq st v0 in
+  let dv = st.bdefs.(v) in
+  match dv, d with
+  | Bv_none, Bv_eq u0 ->
+     let u = brepr_eq st u0 in
+     (if u <> v then st.bdefs.(v) <- Bv_eq u)
+  | Bv_none, Bv_neg u0 ->
+     let u = brepr_eq st u0 in
+     (if u = v then
+        raise Pr.Root_failure
+      else st.bdefs.(v) <- Bv_neg u)
+  | Bv_none, def | def, Bv_none ->
+     st.bdefs.(v) <- def
+  | Bv_neg v0', def' when negatable_bdef def' -> 
+     let v' = brepr_eq st v0' in
+     let n_def = negate_bdef def' |> force_option in
+     apply_bdef st v' n_def
+  | def, Bv_eq u0 ->
+     (* Unifying. *)
+     let u = brepr_eq st u0 in
+     let du = st.bdefs.(u) in
+     if u <> v then
+       begin
+         match du with
+         | Bv_none -> st.bdefs.(u) <- Bv_eq v
+         | def' -> (st.bdefs.(u) <- Bv_eq v ; fzn_assert_beq st v def')
+       end
+  | def, Bv_neg u0 when negatable_bdef def ->
+     let u = brepr_eq st u0 in
+     let n_def = negate_bdef def |> force_option in
+     begin
+     if u = v then
+       raise Pr.Root_failure
+     else
+       st.bdefs.(v) <- Bv_neg u ; apply_bdef st u n_def
+     end
+  (* TODO: Other cases *)
+  | Bv_const a, Bv_const b -> (if a <> b then raise Pr.Root_failure)
+  | def, Bv_const b -> (st.bdefs.(v) <- Bv_const b ; fzn_assert_beq st v def)
+  | _, def' -> fzn_assert_beq st v def'
 
-let rec resolve_idefs st v d d' =
-  match d, d' with
-  (* No conflict *)
-  | Iv_none, def
-  | def, Iv_none -> st.idefs.(v) <- def
-  (* Aliasing *)
-  | Iv_eq v', def
-  | def, Iv_eq v' ->
-    if v = v' then
-      st.idefs.(v) <- def
-    else
-      (st.idefs.(v) <- Iv_eq v' ;
-       resolve_idefs st v st.idefs.(v') def)
-  | Iv_opp v', def
-  | def, Iv_opp v' -> 
-    if v = v' then 
-      raise Pr.Root_failure
-      (* failwith "Top-level failure: x = ~x." *)
-    else
-      begin match negate_idef def with
-        | Some def' ->
-          (st.idefs.(v) <- Iv_opp v' ;
-           resolve_idefs st v st.idefs.(v') def')
-        | None -> fzn_assert_ieq st v def
-      end
-  | d1, d2 ->
-    (st.idefs.(v) <- d1; fzn_assert_ieq st v d2)
-    (* FIXME: Add special cases *)
-  (*
-  (* Arithmetic functions *)
-  | Iv_lin xs -> failwith "FIXME"
-  | Iv_prod xs -> failwith "FIXME"
-  | Iv_max xs -> (("array_int_maximum", [| Pr.Ivar x; to_ivars xs |]), [])
-  | Iv_min xs -> (("array_int_minimum", [| Pr.Ivar x; to_ivars xs |]), [])
-  | Iv_b2i b -> (("bool2int", [| Pr.Bvar b; Pr.Ivar x |]), [])
-  *)
+and apply_idef st v0 d =
+  let v = irepr_eq st v0 in
+  let dv = st.idefs.(v) in
+  match dv, d with
+  | Iv_none, Iv_eq u0 ->
+     let u = irepr_eq st u0 in
+     (if u <> v then st.idefs.(v) <- Iv_eq u)
+  | Iv_none, Iv_opp u0 ->
+     let u = irepr_eq st u0 in
+     (if u = v then
+        st.idefs.(v) <- Iv_const 0
+      else
+        st.idefs.(v) <- Iv_opp u)
+  | Iv_none, def | def, Iv_none ->
+     st.idefs.(v) <- def
+  | Iv_b2i v', Iv_b2i u' -> apply_bdef st v' (Bv_eq u')
+  | Iv_opp v0', def' when negatable_idef def' -> 
+     let v' = irepr_eq st v0' in
+     let n_def = negate_idef def' |> force_option in
+     apply_idef st v' n_def
+  | def, Iv_eq u0 ->
+     (* Unifying. *)
+     let u = irepr_eq st u0 in
+     let du = st.idefs.(u) in
+     if u <> v then
+       begin
+         match du with
+         | Iv_none -> st.idefs.(u) <- Iv_eq v
+         | def' -> (st.idefs.(u) <- Iv_eq v ; fzn_assert_ieq st v def')
+       end
+  | def, Iv_opp u0 when negatable_idef def ->
+     let u = irepr_eq st u0 in
+     let n_def = negate_idef def |> force_option in
+     begin
+     if u = v then
+       (st.idefs.(v) <- Iv_const 0 ; fzn_assert_ieq st v def)
+     else
+       (st.idefs.(v) <- Iv_opp u ; apply_idef st u n_def)
+     end
+  (* TODO: Other cases *)
+  | Iv_const a, Iv_const b -> (if a <> b then raise Pr.Root_failure)
+  | def, Iv_const k -> (st.idefs.(v) <- Iv_const k ; fzn_assert_ieq st v def)
+  | _, def' -> fzn_assert_ieq st v def'
 
-let set_bool st x b = resolve_bdefs st x st.bdefs.(x) (Bv_const b)
-  (* Dy.add st.cons (("bool_eq", [| Pr.Bvar x; Pr.Blit b |]), []) *)
-let set_int st x k = resolve_idefs st x st.idefs.(x) (Iv_const k)
+let set_bool st x b = apply_bdef st x (Bv_const b)
+let set_int st x k = apply_idef st x (Iv_const k)
 
-let apply_bdef st x d = resolve_bdefs st x st.bdefs.(x) d
-let apply_idef st x d = resolve_idefs st x st.idefs.(x) d
- 
 let simp_irel_reif rel pr st args anns =
   let r = Pr.get_bval args.(2) in
   match r with
@@ -393,8 +426,8 @@ let simp_irel_reif rel pr st args anns =
 let simp_bool_eq pr st args anns =
   match Pr.get_bval args.(0), Pr.get_bval args.(1) with
   | Pr.Bv_bool x, Pr.Bv_bool y -> if x <> y then
-    (* failwith "Found toplevel conflict in bool_eq" *)
-    raise Pr.Root_failure
+  (* failwith "Found toplevel conflict in bool_eq" *)
+     raise Pr.Root_failure
   | (Pr.Bv_bool b, Pr.Bv_var x
   |  Pr.Bv_var x, Pr.Bv_bool b) ->
     (* Dy.add st.cons (("bool_eq", [|Pr.Bvar x ; Pr.Blit b|]), anns) *)
@@ -538,7 +571,11 @@ let simp_lin_eq pr st args anns =
 let simplify_constraint problem state id args anns =
   try
     let simplifier = H.find registry id in
-    simplifier problem state args anns
+    try
+        simplifier problem state args anns
+    with Pr.Root_failure ->
+      let _ = Format.fprintf Format.err_formatter "%% Toplevel failure simplifying %s.@." id
+      in raise Pr.Root_failure
   with Not_found -> Dy.add state.cons ((id, args), anns)
 
 let log_reprs idefs bdefs =
@@ -574,7 +611,7 @@ let init () =
       "int_lin_eq", simp_lin_eq ;
       "int_eq", simp_int_eq ;
       "bool_eq", simp_bool_eq ; 
-      "bool_ne", simp_bool_ne ;
+      "bool_not", simp_bool_ne ;
       "bool2int", simp_bool2int ;
       "set_in", simp_set_in ;
     ] in

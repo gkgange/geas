@@ -349,10 +349,34 @@ void ivar_ext::make_eager(void) {
 
 bool ivar_ext::make_sparse(vec<pval_t>& _vs) {
   // Only safe at decision level 0.
-  kind = IV_Strict;
 
   vec<pval_t> vs(_vs);
   uniq(vs);
+
+  if(kind == IV_Strict) {
+    // If it's already strict, just turn off all the other
+    // forbidden literals.
+    auto it = eqtable.begin();
+    auto en = eqtable.end();
+
+    auto v_it = vs.begin();
+    auto v_en = vs.end();
+
+    for(; it != en; ++it) {
+      while(v_it != v_en && *v_it < (*it).key)
+        ++v_it;
+
+      if((*it).key < *v_it) {
+        if(!enqueue(*s, ~(*it).value, reason()))
+          return false;
+      }
+    }
+
+    return true;
+  }
+
+  kind = IV_Strict;
+
   // Make the watch-maps sparse.
 // #if 0
   s->infer.make_sparse(p, vs);

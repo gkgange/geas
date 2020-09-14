@@ -178,7 +178,13 @@ let booleanize_linterms xs k =
         let u = S.ivar_ub x in
         match u - l with
         | 0 -> aux xs' (k - c * l) acc
-        | 1 -> aux xs' (k - c * l) ((c, S.ivar_gt x l) :: acc)
+        | 1 ->
+           begin
+             if c < 0 then
+               aux xs' (k - c * u) ((-c, S.ivar_lt x u) :: acc)
+             else
+               aux xs' (k - c * l) ((c, S.ivar_gt x l) :: acc)
+           end
         | _ -> None
       end
     in

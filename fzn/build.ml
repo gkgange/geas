@@ -323,6 +323,8 @@ let build_problem solver p ctxs =
   Dy.iteri (fun id ((ident, expr), anns) ->
            Sol.set_cons_id solver (id+1) ;
            if not (post_constraint solver env ident expr anns) then
+             (* let _ = Format.fprintf Format.err_formatter
+                       "%% Failure posting constraint %s/%d (%d)@:" ident (Array.length expr) (id+1) in *)
              raise Pr.Root_failure
            else
              ())
