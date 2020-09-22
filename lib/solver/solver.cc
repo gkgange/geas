@@ -1824,8 +1824,10 @@ bool add_clause(solver_data& s, vec<clause_elt>& elts) {
   elts.shrink(elts.size()-jj);
   
   // False at root level
-  if(elts.size() == 0)
+  if(elts.size() == 0) {
+    s.solver_is_consistent = 0;
     return false;
+  }
 
   // Now check for subsumption
   sort(elts.begin(), elts.end(), cmp_clause_elt);
