@@ -52,7 +52,6 @@ class Heap {
         indices[x] = i;
     }
 
-
     inline void percolateDown(int i)
     {
         int x = heap[i];
@@ -115,9 +114,12 @@ class Heap {
       int r = heap.last();
       heap[p] = r;
       indices[r] = p;
+      indices[x] = -1;
       heap.pop();
-      percolateUp(p);
-      percolateDown(p);
+      if(heap.size() > 1 && p < heap.size()) {
+        percolateUp(p);
+        percolateDown(p);
+      }
     }
 
 

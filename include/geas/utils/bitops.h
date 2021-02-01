@@ -1,6 +1,8 @@
 #ifndef GEAS__BITOPS__H
 #define GEAS__BITOPS__H
 // Helper header for doing stuff on BitMaps.
+#include <cstring>
+
 namespace geas {
   namespace B32 {
     inline unsigned block_bits(void) { return 5; }
