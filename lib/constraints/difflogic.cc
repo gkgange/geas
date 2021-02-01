@@ -152,6 +152,8 @@ public:
     return Wt_Keep;
   }
   // Deactivate redundant constraints
+  // Only redundant if _all_ activators for c are turned off,
+  // so first check the others.
   watch_result wake_dis(int c) {
     if(is_finished(c))
       return Wt_Keep;
@@ -1198,7 +1200,7 @@ bool diff_manager::propagate_suspended_ub(dim_id d) {
 namespace geas {
 namespace difflogic {
 
-bool post(solver_data* s, patom_t r, intvar x, intvar y, int k) {
+bool post_base(solver_data* s, patom_t r, intvar x, intvar y, int k) {
   diff_manager* man(diff_manager::get(s));  
   return man->post(r, x, y, k);
 }
