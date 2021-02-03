@@ -15,6 +15,65 @@
 
 namespace geas {
 
+struct elt {
+   elt(int _c, intvar _x)
+     : c(_c), x(_x) { }
+  int c;
+  intvar x;
+};
+
+int normalize_linex(solver_data* s, const vec<int>& ks, const vec<intvar>& vs, int k, vec<elt>& out) {
+  // Make sure we merge any identical terms.
+  out.clear();
+  vec<elt> trim_elts;
+  for(int ii = 0; ii < vs.size(); ++ii) {
+    trim_elts.push(elt(ks[ii], vs[ii]));
+  }
+  std::sort(trim_elts.begin(), trim_elts.end(),
+            [](const elt& a, const elt& b) { return a.x.p < b.x.p; });
+
+  elt* b_it = trim_elts.begin();
+  elt* b_en = trim_elts.end();
+  elt curr = *b_it;
+
+  for(++b_it; b_it != b_en; ++b_it) {
+    if(curr.x.p == b_it->x.p) {
+      curr.c += b_it->c;
+      k -= b_it->c*(b_it->x.off -curr.x.off);
+    } else if(curr.x.p == (b_it->x.p^1)) {
+      // x' = -x + k (for some k).
+      intvar xP = -b_it->x;
+      curr.c -= b_it->c;
+      k -= b_it->c*(xP.off - curr.x.off);
+    } else {
+      if(curr.c > 0) {
+        out.push(curr);
+      } else if(curr.c < 0) {
+        out.push(elt(-curr.c, -curr.x));
+      }
+      curr = *b_it;
+    }
+  }
+  if(curr.x.lb(s->ctx()) == curr.x.ub(s->ctx())) {
+    k -= curr.c * curr.x.lb(s->ctx());
+  } else if(curr.c > 0) {
+    out.push(curr);
+  } else if(curr.c < 0) {
+    out.push(elt(-curr.c, -curr.x));
+  }
+  return k;
+}
+void normalize_linex_inplace(solver_data* s, vec<int>& ks, vec<intvar>& vs, int& k) {
+  vec<elt> xs;
+  k = normalize_linex(s, ks, vs, k, xs);
+  ks.clear();
+  vs.clear();
+  for(const elt& e : xs) {
+    ks.push(e.c);
+    vs.push(e.x);
+  }
+}
+
 class int_linear_le : public propagator, public prop_inst<int_linear_le> {
   enum { Var_None = -1 };
 
@@ -31,12 +90,14 @@ class int_linear_le : public propagator, public prop_inst<int_linear_le> {
   watch_result wake_x(int xi) { queue_prop(); return Wt_Keep; }
   watch_result wake_y(int xi) { queue_prop(); return Wt_Keep; }
   
+  /*
   struct elt {
     elt(int _c, intvar _x)
       : c(_c), x(_x) { }
     int c;
     intvar x;
   };
+  */
 
   // Requires backtracking
   void ex_naive(int ei, vec<clause_elt>& expl) {
@@ -83,10 +144,9 @@ class int_linear_le : public propagator, public prop_inst<int_linear_le> {
       {
         if(!s->state.is_entailed_l0(_r))
           assert(0 && "int_linear_le doesn't support reification!");
-      for(int ii = 0; ii < vs.size(); ii++) {
-        elt e = ks[ii] > 0 ? elt(ks[ii], vs[ii]) : elt(-ks[ii], -vs[ii]);
-        e.x.attach(E_LB, watch<&P::wake_x>(xs.size(), Wt_IDEM));
-        xs.push(e);
+      k = normalize_linex(s, ks, vs, k, xs);
+      for(int ii = 0; ii < xs.size(); ii++) {
+        xs[ii].x.attach(E_LB, watch<&P::wake_x>(ii, Wt_IDEM));
       }
     }
 
@@ -206,12 +266,14 @@ class lin_le_inc : public propagator, public prop_inst<lin_le_inc> {
   enum { Var_None = -1 };
   enum { S_Active = 1, S_Red = 2 };
   
+  /*
   struct elt {
     elt(int _c, intvar _x)
       : c(_c), x(_x) { }
     int c;
     intvar x;
   };
+  */
 
   forceinline int delta(int c, pid_t p) {
     return c * (s->state.p_vals[p] - s->wake_vals[p]);
@@ -301,11 +363,18 @@ class lin_le_inc : public propagator, public prop_inst<lin_le_inc> {
     lin_le_inc(solver_data* s, patom_t _r, vec<int>& ks, vec<intvar>& vs, int _k)
       : propagator(s), r(_r), k(_k), slack(k), threshold(0), status(0)
       {
+        // Normalize to remove any redundant/aliased terms.
+        k = normalize_linex(s, ks, vs, k, xs);
+        for(int ii = 0; ii < xs.size(); ++ii) {
+          xs[ii].x.attach(E_LB, watch<&P::wake_x>(ii, Wt_IDEM));
+        }
+          /*
       for(int ii = 0; ii < vs.size(); ii++) {
         elt e = ks[ii] > 0 ? elt(ks[ii], vs[ii]) : elt(-ks[ii], -vs[ii]);
         e.x.attach(E_LB, watch<&P::wake_x>(xs.size(), Wt_IDEM));
         xs.push(e);
       }
+          */
       // Initialize lower bound
       for(const elt& e : xs)
         slack -= e.c * lb_prev(e.x);
@@ -771,12 +840,14 @@ class int_linear_ne : public propagator, public prop_inst<int_linear_ne> {
 
 
 public:
+  /*
   struct elt {
     elt(int _c, intvar _x)
       : c(_c), x(_x) { }
     int c;
     intvar x;
   };
+  */
   
   int_linear_ne(solver_data* s, patom_t _r, vec<int>& ks, vec<intvar>& xs, int _k)
     : propagator(s), r(_r), k(_k), t_act(0), status(0) {
@@ -784,7 +855,7 @@ public:
     for(int ii = 0; ii < xs.size(); ii++) {
       // FIXME
       make_eager(xs[ii]);
-      vs.push(elt { ks[ii], xs[ii] });
+      vs.push(elt(ks[ii], xs[ii]));
       trigs.push(trigger { T_Var, (unsigned int) ii });
     }
     if(!s->state.is_entailed(r)) {
@@ -987,8 +1058,10 @@ bool linear_le(solver_data* s, vec<int>& ks, vec<intvar>& vs, int k,
   */
 //   new int_linear_le(s, r, ks, vs, k);
 #ifndef USE_CHAIN
-  if(vs.size() > 5)
+  if(vs.size() > 5) {
+    normalize_linex_inplace(s, ks, vs, k);
     return lin_le_mtree<int, intvar>::post(s, r, ks, vs, k);
+  }
   else
     return lin_le_inc::post(s, r, ks, vs, k);
 #else
