@@ -36,6 +36,7 @@ struct susp_sep {
   void growTo(int sz) { sep.growTo(sz, 0); }
 
   vec<int> sep;
+  vec<int> rel;
   Heap<cmp_sep> heap;
 };
 
@@ -44,11 +45,36 @@ public:
   typedef unsigned int diff_id;
   typedef unsigned int dim_id;
   typedef unsigned int cst_id;
+  typedef unsigned int rel_id;
+
+  struct hash_dims {
+    size_t operator()(const std::pair<dim_id,dim_id>& a) const {
+      std::hash<dim_id> h;
+      size_t seed = h(a.first);
+      return (seed << 5) + seed + h(a.second);
+    }
+  };
+
+  struct susp_xref {
+    //int operator[](int idx) const { return xref[idx]; }
+    rel_id rel[32];
+  };
+
+  struct susp_cell {
+    static susp_cell empty(int block, uint32_t mask = 0ul) {
+      susp_cell cell({ block, mask, new susp_xref });
+      return cell;
+    }
+
+    int block;
+    uint32_t mask;
+    susp_xref* xref;
+  };
 
   enum { TRUE_CST = 0 };
 
   diff_manager_bv(solver_data* s)
-    : propagator(s, PRIO_LOW)
+    : propagator(s, PRIO_HIGH)
     , rseen_words(nullptr), rseen_end(nullptr), rseen_bits(nullptr)
     ,  fqueue(cmp_fwd_dist { this })
     ,  rqueue(cmp_rev_dist { this })
@@ -58,7 +84,7 @@ public:
 #endif
   {
     // Trivial placeholder constraint
-    csts.push(cst_info(-1, -1, INT_MAX, at_True));
+    csts.push(cst_info(-1, -1, INT_MAX, at_True, -1));
   }
 
   struct cmp_fwd_dist {
@@ -84,9 +110,9 @@ public:
   // Difference constraint attachments
   // Constraint index 0 is a sentinel.
   struct cst_info {
-    cst_info(int _s, int _d, int _wt, patom_t _act)
+    cst_info(int _s, int _d, int _wt, patom_t _act, rel_id _rel)
       : s(_s), d(_d), wt(_wt), act(_act)
-      , sus_sep(0), diff_next(0) { }
+      , sus_sep(0), diff_next(0), rel(_rel) { }
 
     dim_id s;
     dim_id d;
@@ -96,6 +122,7 @@ public:
 
     int sus_sep; // Separator last time this was suspended.
     cst_id diff_next; // Next-tightest constraint with the same (s, d).
+    rel_id rel;
   };
 
   // So that when we re-suspend a constraint,
@@ -119,6 +146,7 @@ public:
   */
   
   // Information about suspended differences
+  /*
   struct diff_info {
     static diff_info no_cst(void) {
       diff_info diff = {
@@ -143,16 +171,54 @@ public:
     
     cst_id sus_cst;
   };
+  */
+
+  // Information about suspended differences
+  struct rel_info {
+    static rel_info no_cst(int s, int d) {
+      rel_info diff = {
+        INT_MAX,
+        INT_MAX,
+        TRUE_CST,
+
+        0, 0, // fwd/rev crossreferences
+        TRUE_CST,
+
+        s,
+        d
+      };
+      return diff;
+    }
+
+    int wt; // Currently enforced bound
+    int sus_wt; // Tightest suspended constraint.
+
+    cst_id cst; // ID of currently binding constraint.
+
+    // Cross-references.
+    int fwd_idx;
+    int rev_idx;
+    
+    cst_id sus_cst;
+
+    int s;
+    int d;
+    int lb_idx; // Index into lb/ub susp.
+    int ub_idx;
+    int susp_block; // Index into susp_fwd
+  };
 
   struct act_edge {
     int wt;
     dim_id dim;
+    int cst_id;
   };
 
   // Raw constraints
   vec<cst_info> csts;
   // Indexed by (s, d)
-  vec< vec<diff_info> > diffs;
+  //  vec< vec<diff_info> > diffs;
+  vec<rel_info> rels;
 
   // Graph of currently active constraints.
   vec< vec<act_edge> > fwd;
@@ -160,7 +226,8 @@ public:
 
   // Bit-vector of forward-reachable edges with suspended
   // relations.
-  vec<uint64_t*> susp_succ; // s -> { d | s -> d in suspended }
+  // vec<uint64_t*> susp_succ; // s -> { d | s -> d in suspended }
+  vec< vec<susp_cell> > susp_succ;
 
   // Managing satisfiability witnesses of
   // any suspended constraints.
@@ -173,7 +240,7 @@ public:
   //// For detecting disentailed constraints.
   int* rseen_words;
   int* rseen_end;
-  uint64_t* rseen_bits;
+  uint32_t* rseen_bits;
 
   vec<int> rseen_vars;
   vec<int> fseen_vars;
@@ -201,7 +268,7 @@ public:
   vec<susp_trail_entry> susp_trail;
   Tuint susp_trail_sz;
   
-  inline diff_info& get_info(int s, int d) { return diffs[s][d]; }
+  // inline diff_info& get_info(int s, int d) { return diffs[s][d]; }
 
   struct rel_tag {
     rel_tag(void) : s(0), d(0) { }
@@ -211,17 +278,19 @@ public:
     unsigned s : 16;
     unsigned d : 16;
   };
+  /*
   inline unsigned rel_id(dim_id s, dim_id d) {
     return cast::conv<unsigned>(rel_tag(s, d));
   }
+  */
 
-  inline void bv_insert(int*& words, uint64_t* bits, int val) {
-    int block = B64::block(val);
+  inline void bv_insert(int*& words, uint32_t* bits, int val) {
+    int block = B32::block(val);
     if(!bits[block])
       *words++ = block;
-    bits[block] |= B64::bit(val);
+    bits[block] |= B32::bit(val);
   }
-  inline void bv_clear(int* words, int*& words_end, uint64_t* bits) {
+  inline void bv_clear(int* words, int*& words_end, uint32_t* bits) {
     for(int w : range(words, words_end))
       bits[w] = 0;
     words_end = words;
@@ -229,12 +298,13 @@ public:
 
   // Having inferred that d - s >= wt, propagate and
   // remove any suspended constraints [d - s < wt].
-  bool _process_suspended_rel(dim_id s, dim_id d, int wt);
-  inline bool process_suspended_rel(dim_id s, dim_id d, int delta) {
+  bool _process_suspended_rel(rel_id d, int wt, uint32_t& mask);
+  inline bool process_suspended_rel(rel_id rel_id, int delta, uint32_t& mask) {
     // int wt = fdist[s] + rdist[d] - delta; // This is min diff from d to s.
-    int wt = delta - fdist[s] - rdist[d]; // Which makes this the max from s to d.
-    if(get_info(s, d).sus_wt < wt)
-      return _process_suspended_rel(s, d, wt);
+    const rel_info& diff(rels[rel_id]);
+    int wt = delta - fdist[diff.s] - rdist[diff.d]; // Which makes this the max from s to d.
+    if(diff.sus_wt < wt)
+      return _process_suspended_rel(rel_id, wt, mask);
     return true;
   }
 
@@ -293,7 +363,7 @@ public:
     */
     // TODO
     const cst_info& cst(csts[ci]);
-    if(cst.wt < get_info(cst.s, cst.d).wt) {
+    if(cst.wt < rels[cst.rel].wt) {
       act_queue.push(ci);
       queue_prop();
     }
@@ -304,7 +374,6 @@ public:
     // TODO
     /*
       untrail();
-      finished.insert(c);
     */
     return Wt_Keep;
   }
@@ -351,6 +420,8 @@ public:
 
         // If so, add the edge to the graph.
         edges.push(std::make_tuple(c.s, c.wt, c.d));
+        seen.add(c.s);
+        seen.add(c.d);
       }
     }
 
@@ -446,6 +517,7 @@ public:
   void report_internal(void);
   
   dim_id get_dim(intvar x);
+  rel_id get_rel(dim_id x, dim_id y);
 
   vec<intvar> vars;
   //  vec<dim_info> dims;
@@ -468,6 +540,7 @@ public:
 
   // Mapping variables to dimensions
   std::unordered_map<geas::pid_t, dim_id> dim_map;
+  std::unordered_map< std::pair<dim_id, dim_id>, rel_id, hash_dims> rel_map;
 };
 
 // Posting x - y <= k
@@ -480,13 +553,17 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
   // First, find the dimensions corresponding to some offset of x.
   dim_id dx(get_dim(x));
   dim_id dy(get_dim(y));
+  rel_id rel(get_rel(dx, dy));
   assert(vars[dx].p == x.p);
   assert(vars[dy].p == y.p);
+
   // Reformulate the constraint in terms of our dimensions.
-  k += (vars[dx].off - x.off);
+  k += (vars[dx].off - x.off); // if x is shifted higher, constraint is tighter.
   k -= (vars[dy].off - y.off);
 
-  diff_info& di(get_info(dx, dy));
+  // diff_info& di(get_info(dx, dy));
+  rel_info& di(rels[rel]);
+
   // If the constraint is already entailed, we can
   // ignore it.
   if(di.wt <= k)
@@ -498,12 +575,11 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
   }
   if(r.lb(s->ctx())) {
     // Already active. Just a globally true edge.
-    // check_potential();
     if(pot[dx] + k - pot[dy] < 0 && !repair_potential(dx, dy, k))
       return false;
 
     // Check if there's already a constraint posted.
-    if(di.wt < INT_MAX) {
+    if(di.cst) {
       assert(di.cst != 0);
       fwd[dx][di.fwd_idx].wt = k;
       rev[dy][di.rev_idx].wt = k;
@@ -511,15 +587,14 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
       csts[di.cst].act = r;
     } else {
       int ci = csts.size();
-      csts.push(cst_info(dx, dy, k, r));
+      csts.push(cst_info(dx, dy, k, r, rel));
       di.cst = ci;
       di.fwd_idx = fwd[dx].size();
       di.rev_idx = rev[dy].size();
-      fwd[dx].push(act_edge { k, dy });
-      rev[dy].push(act_edge { k, dx });
+      fwd[dx].push(act_edge { k, dy, ci });
+      rev[dy].push(act_edge { k, dx, ci });
     }
     di.wt = k;
-    // di.cst = TRUE_CST;
 
     lb_change.add(dx);
     ub_change.add(dy);
@@ -527,8 +602,7 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
     // inferences.
   } else {
     cst_id ci = csts.size();
-    csts.push(cst_info(dx, dy, k, r));
-    // Insert cst into the linked list for (s, d)
+    csts.push(cst_info(dx, dy, k, r, rel));
 
     // Suspended. Set up all the data-structures.
     attach(s, r, watch<&P::wake_r>(ci));
@@ -540,6 +614,33 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
     // Insert ci into the ordered list of constraints on (dx, dy).
     if(k <= di.sus_wt) {
       csts[ci].diff_next = di.sus_cst;
+      if(di.sus_wt == INT_MAX) {
+        // If this is the first suspended constraint, set up the
+        // crossreferences.
+        int lb_idx = susp_lb[dx]->sep.size();
+        susp_lb[dx]->sep.push();
+        susp_lb[dx]->rel.push(rel);
+        di.lb_idx = lb_idx;
+        int ub_idx = susp_ub[dy]->sep.size();
+        susp_ub[dy]->sep.push();
+        susp_ub[dy]->rel.push(rel);
+        di.ub_idx = ub_idx;
+
+        auto& s_succ(susp_succ[dx]);
+        int d_block = B32::block(dy);
+        uint32_t d_bit = B32::bit(dy);
+        unsigned susp_idx = 0;
+        for(susp_cell& cell : s_succ) {
+          if(cell.block == d_block)
+            goto susp_idx_found;
+          ++susp_idx;
+        }
+        // If we fell through, create a new one.
+        s_succ.push(susp_cell::empty(d_block));
+    susp_idx_found:
+        s_succ[susp_idx].xref->rel[B32::index(dy)] = rel;
+        di.susp_block = susp_idx;
+      }
       suspend_cst(ci);
     } else {
       // Insert this in the correct place
@@ -563,7 +664,8 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
 bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
   // Check if we're directly inconsistent.
   const cst_info& cst(csts[ci]);
-  diff_info& diff(get_info(cst.s, cst.d));
+  // diff_info& diff(get_info(cst.s, cst.d));
+  rel_info& diff(rels[cst.rel]);
 
   // If the constraint is already entailed,
   // skip it.
@@ -580,31 +682,35 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
     dim_id d_r(cst.s);
     do {
       cst_id c_r(fpred[d_r]);
-      diff_info curr(get_info(c_r, d_r));
-      EX_PUSH(confl, ~csts[curr.cst].act);
-      d_r = c_r;
+      // rel_info curr(get_info(c_r, d_r));
+      EX_PUSH(confl, ~csts[c_r].act);
+      d_r = csts[c_r].s;
     } while (d_r != cst.d);
     return false;
   }
 
   // Need to fill rdist first, everything
   // always looks redundant.
+  rpred[cst.s] = ci;
   fill_rdist(cst.s, cst.d, cst.wt);
   if(rseen_vars.size() == 0) {
     rseen_vars.clear();
     return true;
   }
+  fpred[cst.d] = ci;
   fill_fdist(cst.s, cst.d, cst.wt);
   susp_trail.push(susp_trail_entry(diff.cst, ci));
 
   if(diff.cst) {
     fwd[cst.s][diff.fwd_idx].wt = cst.wt;
+    fwd[cst.s][diff.fwd_idx].cst_id = ci;
     rev[cst.d][diff.rev_idx].wt = cst.wt;
+    rev[cst.d][diff.rev_idx].cst_id = ci;
   } else {
     diff.fwd_idx = fwd[cst.s].size();
     diff.rev_idx = rev[cst.d].size();
-    fwd[cst.s].push(act_edge { cst.wt, cst.d });
-    rev[cst.d].push(act_edge { cst.wt, cst.s });
+    fwd[cst.s].push(act_edge { cst.wt, cst.d, ci });
+    rev[cst.d].push(act_edge { cst.wt, cst.s, ci });
   }
   diff.wt = cst.wt;
   diff.cst = ci;
@@ -639,7 +745,7 @@ void diff_manager_bv::fill_rdist(dim_id s, dim_id d, int wt) {
   int flag_count = 1;
   rdist[d] = 0; flag[d] = 0; rseen.add(d); rqueue.insert(d);
   rdist[s] = wt; flag[s] = 1; rseen.add(s); rqueue.insert(s);
-  rpred[s] = d;
+  // rpred[s] = d; // Set in the caller, to avoid an extra argument.
   while(!rqueue.empty()) {
     dim_id d(rqueue.removeMin());
     int d_wt = rdist[d];
@@ -652,20 +758,20 @@ void diff_manager_bv::fill_rdist(dim_id s, dim_id d, int wt) {
       if(!rseen.elem(pred)) {
         flag_count += flag[d];
         rdist[pred] = d_wt + pred_wt; flag[pred] = flag[d];
-        rpred[pred] = d;
+        rpred[pred] = act.cst_id;
         rseen.add(pred); rqueue.insert(pred); 
       } else {
         if(d_wt + pred_wt < rdist[pred]) {
           assert(rqueue.inHeap(pred));
           flag_count += flag[d] - flag[pred];
           rdist[pred] = d_wt + pred_wt; flag[pred] = flag[d];
-          rpred[pred] = d;
+          rpred[pred] = act.cst_id;
           rqueue.decrease(pred);
         } else if(d_wt + pred_wt == rdist[pred] && flag[d] < flag[pred]) {
           assert(rqueue.inHeap(pred));
           flag_count += flag[d] - flag[pred];
           flag[pred] = flag[d];
-          rpred[pred] = d;
+          rpred[pred] = act.cst_id;
           rqueue.decrease(pred);
         }
       }
@@ -684,7 +790,7 @@ void diff_manager_bv::fill_fdist(dim_id s, dim_id d, int wt) {
   int flag_count = 1;
   fdist[s] = 0; flag[s] = 0; fseen.add(s); fqueue.insert(s);
   fdist[d] = wt; flag[d] = 1; fseen.add(d); fqueue.insert(d);
-  fpred[d] = s;
+  // fpred[d] = s; // Set in the caller, to avoid passing ci.
   while(!fqueue.empty()) {
     dim_id s(fqueue.removeMin());
     int s_wt = fdist[s];
@@ -696,7 +802,7 @@ void diff_manager_bv::fill_fdist(dim_id s, dim_id d, int wt) {
       int succ_wt = act.wt;
       if(!fseen.elem(succ)) {
         fdist[succ] = s_wt + succ_wt; flag[succ] = flag[s];
-        fpred[succ] = s;
+        fpred[succ] = act.cst_id;
         fseen.add(succ); fqueue.insert(succ);
         flag_count += flag[s];
       } else {
@@ -704,12 +810,12 @@ void diff_manager_bv::fill_fdist(dim_id s, dim_id d, int wt) {
           assert(fqueue.inHeap(succ));
           flag_count += flag[s] - flag[succ];
           fdist[succ] = s_wt + succ_wt; flag[succ] = flag[s];
-          fpred[succ] = s;
+          fpred[succ] = act.cst_id;
           fqueue.decrease(succ);
         } else if(s_wt + succ_wt == fdist[succ] && flag[s] < flag[succ]) {
           flag_count += flag[s] - flag[succ];
           flag[succ] = flag[s];
-          fpred[succ] = s;
+          fpred[succ] = act.cst_id;
           fqueue.decrease(succ);
         }
       }
@@ -731,7 +837,7 @@ void diff_manager_bv::fill_fdist(dim_id s, dim_id d, int wt) {
 bool diff_manager_bv::process_act_bounds(dim_id s, dim_id d) {
   int r_ub = ub(vars[d]);
   for(int r_s : rseen_vars) {
-    int r_d = rpred[r_s];
+    int r_cst = rpred[r_s];
 
     int s_ub = r_ub + rdist[r_s];
     if(ub(vars[r_s]) > s_ub) {
@@ -739,13 +845,13 @@ bool diff_manager_bv::process_act_bounds(dim_id s, dim_id d) {
       ub_count++;
 #endif
       if(!set_ub(vars[r_s], s_ub,
-                 expl<&P::ex_ub>(get_info(r_s, r_d).cst)))
+                 expl<&P::ex_ub>(r_cst)))
         return false;
     }
   }
   int f_lb = lb(vars[s]);
   for(int f_d : fseen_vars) {
-    int f_s = fpred[f_d];
+    int f_cst = fpred[f_d];
 
     int d_lb = f_lb - fdist[f_d];
     if(lb(vars[f_d]) < d_lb) {
@@ -753,7 +859,7 @@ bool diff_manager_bv::process_act_bounds(dim_id s, dim_id d) {
       lb_count++;
 #endif
       if(!set_lb(vars[f_d], d_lb,
-                 expl<&P::ex_lb>(get_info(f_s, f_d).cst)))
+                 expl<&P::ex_lb>(f_cst)))
         return false;
     }
   }
@@ -766,10 +872,12 @@ bool diff_manager_bv::process_suspended(int delta) {
     bv_insert(rseen_end, rseen_bits, d);
   
   for(int s : fseen_vars) {
-    uint64_t* succs(susp_succ[s]);
 
     // Look only at the potential successors of s which
     // got tighter through the new edge (in rseen)
+  /*
+    uint64_t* succs(susp_succ[s]);
+
     for(int r_w : range(rseen_words, rseen_end)) {
       if(succs[r_w] & rseen_bits[r_w]) {
         int base = r_w << B64::block_bits();
@@ -783,16 +891,34 @@ bool diff_manager_bv::process_suspended(int delta) {
         }
       }
     }
+  */
+    for(susp_cell& cell : susp_succ[s]) {
+      if(rseen_bits[cell.block] & cell.mask) {
+        int32_t word = rseen_bits[cell.block] & cell.mask;
+        while(word) {
+          unsigned offset = __builtin_ctzl(word);
+          word &= (word-1);
+
+          int rel = cell.xref->rel[offset];
+          if(!process_suspended_rel(rel, delta, cell.mask)) {
+            bv_clear(rseen_words, rseen_end, rseen_bits);
+            return false;
+          }
+        }
+      }
+    }
   }
   bv_clear(rseen_words, rseen_end, rseen_bits);
   return true;
 }
 
-bool diff_manager_bv::_process_suspended_rel(dim_id s, dim_id d, int wt) {
-  diff_info& info(get_info(s, d));
-  assert(susp_succ[s][B64::block(d)] & B64::bit(d));
+bool diff_manager_bv::_process_suspended_rel(rel_id rel, int wt, uint32_t& mask) {
+  rel_info& diff(rels[rel]);
+  dim_id s(diff.s);
+  dim_id d(diff.d);
+  assert(susp_succ[s][diff.susp_block].mask & B32::bit(d));
 
-  cst_id sus(info.sus_cst);
+  cst_id sus(diff.sus_cst);
   if(csts[sus].wt < wt) {
     // int sus0 = sus;
     do {
@@ -810,15 +936,16 @@ bool diff_manager_bv::_process_suspended_rel(dim_id s, dim_id d, int wt) {
         sus = curr.diff_next;
     } while(csts[sus].wt < wt);
     // susp_trail.push(susp_trail_entry(sus0, 0));
-    info.sus_cst = sus;
-    info.sus_wt = csts[sus].wt;
+    diff.sus_cst = sus;
+    diff.sus_wt = csts[sus].wt;
   }
 
-  if(csts[sus].wt >= info.wt) {
+  if(csts[sus].wt >= diff.wt) {
     // The remaining suspended constraints are entailed.
-    susp_succ[s][B64::block(d)] &= ~B64::bit(d);
-    susp_lb[s]->heap.remove(d);
-    susp_ub[d]->heap.remove(s);
+    // susp_succ[s][B64::block(d)] &= ~B64::bit(d);
+    mask &= ~B32::bit(d);
+    susp_lb[s]->heap.remove(diff.lb_idx);
+    susp_ub[d]->heap.remove(diff.ub_idx);
   }
   return true;
 }
@@ -833,7 +960,7 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
         lb_count++;
 #endif
       if(!set_lb(vars[act.dim], s_lb - act.wt,
-                 expl<&P::ex_lb>(get_info(s, act.dim).cst)))
+                 expl<&P::ex_lb>(act.cst_id)))
         return false;
       if(!process_lb_change(act.dim))
         return false;
@@ -843,18 +970,21 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
   // Now check the suspended constraints.
   auto& s_susp(*susp_lb[s]);
   while(!s_susp.heap.empty()) {
-    int d = s_susp.heap.getMin();
+    int rel_idx = s_susp.heap.getMin();
+    rel_id rel = s_susp.rel[rel_idx];
+    rel_info& diff(rels[rel]);
+    int d = diff.d;
 
-    if(s_lb <= s_susp.sep[d])
+    if(s_lb <= s_susp.sep[rel_idx])
       break;
 
     int d_ub = ub(vars[d]);
     int diff_min = s_lb - d_ub;
-    diff_info& diff(get_info(s, d));
+    //    diff_info& diff(get_info(s, d));
     int sus_wt = diff.sus_wt;
     int sus_cst = diff.sus_cst;
     if(sus_wt < diff_min) {
-      csts[sus_cst].sus_sep = s_susp.sep[d];
+      csts[sus_cst].sus_sep = s_susp.sep[rel_idx];
       susp_trail.push(susp_trail_entry(sus_cst, 0));
 
       // Deactivate any newly invalid constraints.
@@ -873,21 +1003,21 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
       if(diff.wt <= sus_wt) {
         // Remaining suspended constraints are redundant.
         s_susp.heap.removeMin();
-        susp_ub[d]->heap.remove(s);
-        susp_succ[s][B64::block(d)] &= ~B64::bit(d);
+        susp_ub[d]->heap.remove(diff.ub_idx);
+        susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
         continue;
       }
     }
     assert(sus_wt >= diff_min);
     // For now, put the threshold tight against the ub.
     int sep_new = d_ub + sus_wt;
-    s_susp.sep[d] = sep_new;
+    s_susp.sep[rel_idx] = sep_new;
     assert(sep_new >= vars[s].lb(this->s));
     //s_susp.heap.percolateDown(0);
-    s_susp.heap.increase_(d);
-    susp_ub[d]->sep[s] = -d_ub;
+    s_susp.heap.increase_(rel_idx);
+    susp_ub[d]->sep[diff.ub_idx] = -d_ub;
     assert(-d_ub >= -vars[d].ub(this->s));
-    susp_ub[d]->heap.decrease(s);
+    susp_ub[d]->heap.decrease(diff.ub_idx);
   }
 
   return true;
@@ -901,7 +1031,7 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
         ub_count++;
 #endif
       if(!set_ub(vars[act.dim], d_ub + act.wt,
-                 expl<&P::ex_ub>(get_info(act.dim, d).cst)))
+                 expl<&P::ex_ub>(act.cst_id)))
         return false;
       if(!process_ub_change(act.dim))
         return false;
@@ -910,17 +1040,22 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
 
   auto& d_susp(*susp_ub[d]);
   while(!d_susp.heap.empty()) {
-    int s = d_susp.heap.getMin();
-    if(d_ub >= -d_susp.sep[s])
+    // int s = d_susp.heap.getMin();
+    int rel_idx = d_susp.heap.getMin();
+    rel_id rel = d_susp.rel[rel_idx];
+    rel_info& diff(rels[rel]);
+    int s = diff.s;
+
+    if(d_ub >= -d_susp.sep[rel_idx])
       break;
 
     int s_lb = lb(vars[s]);
     int diff_min = s_lb - d_ub;
-    diff_info& diff(get_info(s, d));
+    //    diff_info& diff(get_info(s, d));
     int sus_wt = diff.sus_wt;
     int sus_cst = diff.sus_cst;
     if(sus_wt < diff_min) {
-      csts[sus_cst].sus_sep = -d_susp.sep[s] + sus_wt;
+      csts[sus_cst].sus_sep = -d_susp.sep[rel_idx] + sus_wt;
       susp_trail.push(susp_trail_entry(sus_cst, 0));
 
       // Deactivate any newly invalid constraints.
@@ -939,20 +1074,20 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
       if(diff.wt <= sus_wt) {
         // Remaining suspended constraints are redundant.
         d_susp.heap.removeMin();
-        susp_lb[s]->heap.remove(d);
-        susp_succ[s][B64::block(d)] &= ~B64::bit(d);
+        susp_lb[s]->heap.remove(diff.lb_idx);
+        susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
         continue;
       }
     }
     assert(sus_wt >= diff_min);
     // For now, put the threshold tight against the ub.
     int sep_new = s_lb;
-    d_susp.sep[s] = -sep_new +sus_wt;
-    assert(d_susp.sep[s] >= -vars[d].ub(this->s));
-    d_susp.heap.increase_(s);
-    susp_lb[s]->sep[d] = s_lb;
+    d_susp.sep[rel_idx] = -sep_new +sus_wt;
+    assert(d_susp.sep[rel_idx] >= -vars[d].ub(this->s));
+    d_susp.heap.increase_(rel_idx);
+    susp_lb[s]->sep[diff.lb_idx] = s_lb;
     assert(s_lb >= vars[s].lb(this->s));
-    susp_lb[s]->heap.decrease(d);
+    susp_lb[s]->heap.decrease(diff.lb_idx);
   }
   return true;
 }
@@ -961,7 +1096,8 @@ void diff_manager_bv::suspend_cst(cst_id ci) {
   // Backtracking past the point where a constraint was
   // enforced or disentailed.
   const cst_info& cst(csts[ci]);
-  diff_info& diff(get_info(cst.s, cst.d));
+  // diff_info& diff(get_info(cst.s, cst.d));
+  rel_info& diff(rels[cst.rel]);
 
   // The following can be violated, if we're untrailing because
   // disentailment failed (so we never updated diff.sus_wt).
@@ -972,11 +1108,11 @@ void diff_manager_bv::suspend_cst(cst_id ci) {
   // after some domain changes happened.
   // assert(cst.sus_sep >= vars[cst.s].lb(s));
   // assert(-cst.sus_sep + cst.wt >= -vars[cst.d].ub(s));
-  susp_lb[cst.s]->sep[cst.d] = cst.sus_sep;
-  susp_ub[cst.d]->sep[cst.s] = -cst.sus_sep + cst.wt;
-  susp_lb[cst.s]->update(cst.d);
-  susp_ub[cst.d]->update(cst.s);
-  susp_succ[cst.s][B64::block(cst.d)] |= B64::bit(cst.d);
+  susp_lb[cst.s]->sep[diff.lb_idx] = cst.sus_sep;
+  susp_ub[cst.d]->sep[diff.ub_idx] = -cst.sus_sep + cst.wt;
+  susp_lb[cst.s]->update(diff.lb_idx);
+  susp_ub[cst.d]->update(diff.ub_idx);
+  susp_succ[cst.s][diff.susp_block].mask |= B32::bit(cst.d);
   diff.sus_cst = ci;
 }
 
@@ -991,7 +1127,8 @@ void diff_manager_bv::untrail_to(unsigned sz) {
     if(entry.act_cst) {
       // We're replacing an active constraint.
       const cst_info& cst(csts[entry.act_cst]);
-      diff_info& diff(get_info(cst.s, cst.d));
+      // diff_info& diff(get_info(cst.s, cst.d));
+      rel_info& diff(rels[cst.rel]);
 
       if(entry.old_cst) {
         // Weakening.
@@ -999,7 +1136,9 @@ void diff_manager_bv::untrail_to(unsigned sz) {
         diff.wt = new_wt;
         diff.cst = entry.old_cst;
         fwd[cst.s][diff.fwd_idx].wt = new_wt;
+        fwd[cst.s][diff.fwd_idx].cst_id = entry.old_cst;
         rev[cst.d][diff.rev_idx].wt = new_wt;
+        rev[cst.d][diff.rev_idx].cst_id = entry.old_cst;
       } else {
         // Removal (and suspension)
         diff.wt = INT_MAX;
@@ -1064,10 +1203,9 @@ void diff_manager_bv::ex_r_diff(int tag, pval_t p, vec<clause_elt>& expl) {
   // Now collect the explanation
   dim_id curr(cst.s);
   while(curr != cst.d) {
-    dim_id pred = fpred[curr];
-    cst_id c_r = get_info(pred, curr).cst;
+    cst_id c_r = fpred[curr];
     EX_PUSH(expl, ~csts[c_r].act);
-    curr = pred;
+    curr = csts[c_r].s;
   }
 }
 
@@ -1091,10 +1229,10 @@ bool diff_manager_bv::repair_potential(dim_id s, dim_id d, int wt) {
       if(!fseen.elem(act.dim)) {
         if(p + act.wt - pot[act.dim] >= 0)
           continue;
-        fpred[act.dim] = r;
+        fpred[act.dim] = act.cst_id;
         if(act.dim == s) {
           // Found a negative weight loop from d to s.
-          fpred[s] = r;
+          // fpred[s] = r;
           fseen.clear();
           fqueue.clear();
           return false;
@@ -1106,7 +1244,7 @@ bool diff_manager_bv::repair_potential(dim_id s, dim_id d, int wt) {
         if(p + act.wt < fdist[act.dim]) {
           assert(fqueue.inHeap(act.dim));
           fdist[act.dim] = p + act.wt;
-          fpred[act.dim] = r;
+          fpred[act.dim] = act.cst_id;
           fqueue.decrease(act.dim);
         }
       }
@@ -1125,7 +1263,7 @@ bool diff_manager_bv::repair_potential(dim_id s, dim_id d, int wt) {
 }
 
 // Queue management during traversal.
-inline void diff_manager_bv::queue_fwd(dim_id d, int wt, dim_id r) {
+inline void diff_manager_bv::queue_fwd(dim_id d, int wt, cst_id r) {
   if(fseen.elem(d)) {
     if(wt < fdist[d]) {
       assert(fqueue.inHeap(d));
@@ -1140,7 +1278,7 @@ inline void diff_manager_bv::queue_fwd(dim_id d, int wt, dim_id r) {
     fqueue.insert(d);
   }
 }
-inline void diff_manager_bv::queue_rev(dim_id d, int wt, dim_id r) {
+inline void diff_manager_bv::queue_rev(dim_id d, int wt, cst_id r) {
   if(rseen.elem(d)) {
     if(wt < rdist[d]) {
       assert(rqueue.inHeap(d));
@@ -1246,7 +1384,7 @@ path_cleanup:
       return fdist[s] <= cap;
     }
     for(act_edge act : fwd[s]) {
-      queue_fwd(act.dim, fdist[s] + act.wt, s);
+      queue_fwd(act.dim, fdist[s] + act.wt, act.cst_id);
     }
   }
   fseen.clear();
@@ -1270,6 +1408,7 @@ auto diff_manager_bv::get_dim(intvar x) -> dim_id {
   fwd.push();
   rev.push();
 
+  /*
   diffs.push();
   for(dim_id ii = 0; ii < d; ++ii) {
     diffs[ii].push(diff_info::no_cst());
@@ -1277,24 +1416,27 @@ auto diff_manager_bv::get_dim(intvar x) -> dim_id {
     susp_ub[ii]->growTo(d+1);
   }
   diffs.last().growTo(d+1, diff_info::no_cst());
+  */
 
-  int succ_blocks = B64::req_words(d+1);
-  if(! (d & B64::block_mask())) { // New block.
+  int succ_blocks = B32::req_words(d+1);
+  if(! (d & B32::block_mask())) { // New block.
+    /*
     for(dim_id ii = 0; ii < d; ++ii) {
       // FIXME: check for allocation errors
       susp_succ[ii] = static_cast<uint64_t*>(realloc(susp_succ[ii], sizeof(uint64_t) * succ_blocks));
       susp_succ[ii][B64::block(d)] = 0;
     }
-
+    */
     rseen_words = static_cast<int*>(realloc(rseen_words, sizeof(int) * succ_blocks));
     rseen_end = rseen_words;
-    rseen_bits = static_cast<uint64_t*>(realloc(rseen_bits, sizeof(uint64_t) * succ_blocks));
-    rseen_bits[B64::block(d)] = 0;
+    rseen_bits = static_cast<uint32_t*>(realloc(rseen_bits, sizeof(uint32_t) * succ_blocks));
+    rseen_bits[B32::block(d)] = 0;
   }
-  susp_succ.push(static_cast<uint64_t*>(calloc(succ_blocks, sizeof(uint64_t))));
+  // susp_succ.push(static_cast<uint64_t*>(calloc(succ_blocks, sizeof(uint64_t))));
 
-  susp_lb.push(new susp_sep); susp_lb.last()->growTo(d+1);
-  susp_ub.push(new susp_sep); susp_ub.last()->growTo(d+1);
+  susp_lb.push(new susp_sep); /* susp_lb.last()->growTo(d+1); */
+  susp_ub.push(new susp_sep); /* susp_ub.last()->growTo(d+1); */
+  susp_succ.push();
 
   /*
   dims.push(dim_info(this));
@@ -1310,6 +1452,35 @@ auto diff_manager_bv::get_dim(intvar x) -> dim_id {
   x.attach(E_LB, watch<&P::wake_lb>(d));
   x.attach(E_UB, watch<&P::wake_ub>(d));
   return d;
+}
+
+auto diff_manager_bv::get_rel(dim_id s, dim_id d) -> rel_id {
+  auto it(rel_map.find(std::make_pair(s, d)));
+  if(it != rel_map.end())
+    return (*it).second;
+
+  //  cst_id zero_cst = csts.size();
+  rel_id rel = rels.size();
+
+  csts.push(cst_info(s, d, INT_MAX, at_True, rel));
+  rels.push(rel_info {
+      INT_MAX,  // wt
+      INT_MAX, // sus_wt
+
+      TRUE_CST, // cst
+
+    // Cross-references.
+      0, // {fwd,rev}_idx (not yet set)
+      0,
+
+      TRUE_CST, // sus_cst
+
+      s, d,
+
+      // lb_idx, ub_idx, sus_block (not set)
+      0, 0, 0
+      });
+  return rel;
 }
 
 void diff_manager_bv::report_internal(void) {
