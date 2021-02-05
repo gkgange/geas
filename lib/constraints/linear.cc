@@ -1049,6 +1049,146 @@ bool linear_le_chain(solver_data* s, patom_t r, vec<int>& ks, vec<intvar>& vs, i
   return lin_le_inc::post(s, r, o_ks, o_xs, k);
 }
 
+// Euclid's algorithm, straight from wikipedia.
+int gcd(int a, int b) {
+  int t;
+  if(b > a)
+    std::swap(a, b);
+  while(b != 0) {
+    t = b;
+    b = a % b;
+    a = t;
+  }
+  return a;
+}
+
+int elt_gcd(elt* begin, elt* end) {
+  int coeff = begin->c;
+
+  for(++begin; begin != end; ++begin) {
+    coeff = gcd(coeff, begin->c);
+  }
+  return coeff;
+}
+
+elt linex_decomp_high_base(solver_data* s, elt* begin, elt* end, int lb, int ub) {
+  int coeff = elt_gcd(begin, end);
+
+  vec<int> ks;
+  vec<intvar> xs;
+
+  intvar z = new_intvar(s, lb, ub);
+
+  ks.push(-1);
+  xs.push(z);
+  for(; begin != end; ++begin) {
+    ks.push(begin->c / coeff);
+    xs.push(begin->x);
+  }
+  lin_le_inc::post(s, at_True, ks, xs, 0);
+  return elt(coeff, z);
+}
+
+template<int Deg>
+elt linex_decomp_high(solver_data* s, elt* low, elt* high, int lb, int ub, vec<elt>& scratch) {
+  if(high - low <= Deg) {
+    if(high - low == 1)
+      return *low;
+    return linex_decomp_high_base(s, low, high, lb, ub);
+  }
+  // Subdivide.
+  int b_idx = scratch.size();
+  int sz = high - low;
+  int block_sz = sz/Deg;
+  int excess = sz - Deg * block_sz;
+
+  for(int ii = 0; ii < Deg; ++ii) {
+    elt* next = low + block_sz + (excess > 0);
+    excess--;
+
+    int range_lb = 0;
+    int range_ub = 0;
+    for(const elt& e : range(low, next)) {
+      range_lb += e.c * e.x.lb(s->ctx());
+      range_ub += e.c * e.x.ub(s->ctx());
+    }
+    scratch.push(linex_decomp_high<Deg>(s, low, next, range_lb, range_ub, scratch));
+    low = next;
+  }
+  elt ret = linex_decomp_high_base(s, scratch.begin() + b_idx, scratch.end(), lb, ub);
+  scratch.shrink(scratch.size() - b_idx);
+  return ret;
+}
+
+template<int Deg>
+bool linear_le_decomp(solver_data* s, patom_t r, vec<int>& ks, vec<intvar>& vs, int k) {
+  vec<elt> xs;
+  k = normalize_linex(s, ks, vs, k, xs);
+
+  /*
+  if(xs.size() <= Deg) {
+    // We'll renormalize, but whatever.
+    return lin_le_inc::post(s, r, ks, vs, k);
+  }
+  */
+  assert(xs.size() >= Deg);
+
+  int lb = 0;
+  int ub = 0;
+  for(const elt& e : xs) {
+    assert(e.c > 0);
+    lb += e.c * e.x.lb(s->ctx());
+    ub += e.c * e.x.ub(s->ctx());
+  }
+
+  // Trivial cases
+  if(lb > k)
+    return enqueue(*s, ~r, reason());
+  if(lb == k) {
+    for(const elt& e : xs) {
+      if(!add_clause(s, ~r, e.x <= e.x.lb(s->ctx())))
+        return false;
+    }
+  }
+  if(ub <= k) {
+    return true;
+  }
+
+  // Normal case. Basically same as another recursion level.
+  vec<elt> scratch;
+  elt* low = xs.begin();
+  elt* high = xs.end();
+  int sz = xs.size();
+  int block_sz = sz/Deg;
+  int excess = sz - Deg * block_sz;
+
+  vec<int> top_ks;
+  vec<intvar> top_xs;
+
+  // If it's already enforced, we can cut down the
+  // upper bound.
+  if(r.lb(s->ctx()))
+    ub = k;
+    
+  for(int ii = 0; ii < Deg; ++ii) {
+    elt* next = low + block_sz + (excess > 0);
+    excess--;
+
+    int range_lb = 0;
+    int range_ub = 0;
+    for(const elt& e : range(low, next)) {
+      range_lb += e.c * e.x.lb(s->ctx());
+      range_ub += e.c * e.x.ub(s->ctx());
+    }
+    // elt block = linex_decomp_high<Deg>(s, low, next, range_lb, std::min(ub, range_lb + (ub - lb)), scratch);
+    elt block = linex_decomp_high<Deg>(s, low, next, range_lb, range_ub, scratch);
+    top_ks.push(block.c);
+    top_xs.push(block.x);
+    low = next;
+  }
+  return lin_le_inc::post(s, r, top_ks, top_xs, k);
+}
+
 bool linear_le(solver_data* s, vec<int>& ks, vec<intvar>& vs, int k,
   patom_t r) {
   /*
@@ -1058,9 +1198,12 @@ bool linear_le(solver_data* s, vec<int>& ks, vec<intvar>& vs, int k,
   */
 //   new int_linear_le(s, r, ks, vs, k);
 #ifndef USE_CHAIN
+  // if(vs.size() > 30)
+  //  return linear_le_decomp<4>(s, r, ks, vs, k);
   if(vs.size() > 5) {
     normalize_linex_inplace(s, ks, vs, k);
     return lin_le_mtree<int, intvar>::post(s, r, ks, vs, k);
+    // return linear_le_decomp<4>(s, r, ks, vs, k);
   }
   else
     return lin_le_inc::post(s, r, ks, vs, k);
