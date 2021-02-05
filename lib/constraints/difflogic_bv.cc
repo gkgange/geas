@@ -56,7 +56,6 @@ public:
   };
 
   struct susp_xref {
-    //int operator[](int idx) const { return xref[idx]; }
     rel_id rel[32];
   };
 
@@ -136,44 +135,6 @@ public:
 
   // Information about currently enforced
   // constraints.
-  /*
-  struct rel_info {
-    // Cross-references into fwd and rev, for when we
-    // activate new constraints.
-    int s_act_idx;
-    int d_act_idx;
-  };
-  */
-  
-  // Information about suspended differences
-  /*
-  struct diff_info {
-    static diff_info no_cst(void) {
-      diff_info diff = {
-        INT_MAX,
-        INT_MAX,
-        TRUE_CST,
-
-        0, 0, // fwd/rev crossreferences
-        TRUE_CST
-      };
-      return diff;
-    }
-        
-    int wt; // Currently enforced bound
-    int sus_wt; // Tightest suspended constraint.
-
-    cst_id cst; // ID of currently binding constraint.
-
-    // Cross-references.
-    int fwd_idx;
-    int rev_idx;
-    
-    cst_id sus_cst;
-  };
-  */
-
-  // Information about suspended differences
   struct rel_info {
     static rel_info no_cst(int s, int d) {
       rel_info diff = {
@@ -268,22 +229,6 @@ public:
   vec<susp_trail_entry> susp_trail;
   Tuint susp_trail_sz;
   
-  // inline diff_info& get_info(int s, int d) { return diffs[s][d]; }
-
-  struct rel_tag {
-    rel_tag(void) : s(0), d(0) { }
-    rel_tag(dim_id _s, dim_id _d)
-      : s(_s), d(_d) { assert(s < 1<<16); assert(d < 1<<16); }
-
-    unsigned s : 16;
-    unsigned d : 16;
-  };
-  /*
-  inline unsigned rel_id(dim_id s, dim_id d) {
-    return cast::conv<unsigned>(rel_tag(s, d));
-  }
-  */
-
   inline void bv_insert(int*& words, uint32_t* bits, int val) {
     int block = B32::block(val);
     if(!bits[block])
@@ -308,60 +253,9 @@ public:
     return true;
   }
 
-  /*
-    struct eval_lb_wit {
-    int operator()(cst_id c) const {
-    if(d->finished.elem(c))
-    return INT_MAX;
-    return d->csts[c].wit;
-    }
-    diff_manager_bv* d;
-    };
-    struct eval_ub_wit {
-    int operator()(cst_id c) const {
-    if(d->finished.elem(c))
-    return INT_MAX;
-    return -(d->csts[c].wit - d->csts[c].wt);
-    }
-    diff_manager_bv* d;
-    };
-  */
-
-  /*
-    void check_potential(void) {
-    for(dim_id d : irange(dims.size())) {
-    for(act_info act : dims[d].lb_act) {
-    assert(pot[d] + act.wt - pot[act.y] >= 0);
-    }
-    }
-    }
-    void check_witnesses(void) {
-    for(unsigned int ci : finished.complement()) {
-    assert(lb(vars[csts[ci].x]) <= csts[ci].wit);
-    assert(csts[ci].wit <= ub(vars[csts[ci].y]) + csts[ci].wt);
-    assert(dims[csts[ci].x].threshold_lb.root_val() <= csts[ci].wit);
-    assert(dims[csts[ci].y].threshold_ub.root_val() <= -(csts[ci].wit - csts[ci].wt));
-    }
-    }
-  */
-
-
-  // Can't use finished.elem directly, because
-  // we haven't yet untrailed.
-  /*
-  inline bool is_finished(cst_id c) {
-    return finished.pos(c) < finished_sz;
-  }
-  */
 
   watch_result wake_r(int ci) {
-    /*
-      if(!is_finished(activators[ri].c)) {
-      act_queue.push(ri);
-      queue_prop();
-      }
-    */
-    // TODO
+    untrail();
     const cst_info& cst(csts[ci]);
     if(cst.wt < rels[cst.rel].wt) {
       act_queue.push(ci);
@@ -369,12 +263,10 @@ public:
     }
     return Wt_Keep;
   }
+
   // Deactivate redundant constraints
   watch_result wake_dis(int c) {
     // TODO
-    /*
-      untrail();
-    */
     return Wt_Keep;
   }
 
@@ -407,7 +299,6 @@ public:
     // Put the zero-vertex at the end.
     vec< std::tuple<dim_id, int, dim_id> > edges;
     vec<int> dists(vars.size(), 0);
-    // dim_id v0(vars.size());
 
     boolset seen(vars.size());
     for(cst_info& c : csts.tail()) {
@@ -520,11 +411,6 @@ public:
   rel_id get_rel(dim_id x, dim_id y);
 
   vec<intvar> vars;
-  //  vec<dim_info> dims;
-
-  // vec<diff_info> csts; 
-  // p_sparseset finished;
-  // Tuint finished_sz;
 
   // Changes to deal with when the propagator runs.
   vec<unsigned int> act_queue; // Which activations have occurred 
@@ -689,7 +575,7 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
     return false;
   }
 
-  // Need to fill rdist first, everything
+  // Need to fill rdist first, otherwise everything
   // always looks redundant.
   rpred[cst.s] = ci;
   fill_rdist(cst.s, cst.d, cst.wt);
@@ -717,12 +603,6 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
 
   // If nothing got closer, the constraint
   // we attempted to add was redundant.
-  /*
-  if(rseen_vars.size() == 0) {
-    rseen_vars.clear();
-    return true;
-  }
-  */
 
   // Set up the bitmap for process_suspended.
   for(int v : rseen_vars)
@@ -875,23 +755,6 @@ bool diff_manager_bv::process_suspended(int delta) {
 
     // Look only at the potential successors of s which
     // got tighter through the new edge (in rseen)
-  /*
-    uint64_t* succs(susp_succ[s]);
-
-    for(int r_w : range(rseen_words, rseen_end)) {
-      if(succs[r_w] & rseen_bits[r_w]) {
-        int base = r_w << B64::block_bits();
-        uint64_t word = succs[r_w] & rseen_bits[r_w];
-        bool okay = B64::Forall_Word(base, word, [this, s, delta](int d) {
-            return process_suspended_rel(s, d, delta);
-          });
-        if(!okay) {
-          bv_clear(rseen_words, rseen_end, rseen_bits);
-          return false;
-        }
-      }
-    }
-  */
     for(susp_cell& cell : susp_succ[s]) {
       if(rseen_bits[cell.block] & cell.mask) {
         int32_t word = rseen_bits[cell.block] & cell.mask;
@@ -1164,8 +1027,6 @@ void diff_manager_bv::untrail(void) { untrail_to(susp_trail_sz); }
 // Explanation
 // ===========
 void diff_manager_bv::ex_lb(int ci, pval_t p, vec<clause_elt>& expl) {
-  //rel_tag tag(cast::conv<rel_tag>(ci));
-  // const diff_info& diff(get_info(tag.s, tag.d));
   const cst_info& cst(csts[ci]);
   // Explaining the dest vertex lb.
   int ex_lb = vars[cst.d].lb_of_pval(p);
@@ -1408,42 +1269,19 @@ auto diff_manager_bv::get_dim(intvar x) -> dim_id {
   fwd.push();
   rev.push();
 
-  /*
-  diffs.push();
-  for(dim_id ii = 0; ii < d; ++ii) {
-    diffs[ii].push(diff_info::no_cst());
-    susp_lb[ii]->growTo(d+1);
-    susp_ub[ii]->growTo(d+1);
-  }
-  diffs.last().growTo(d+1, diff_info::no_cst());
-  */
-
   int succ_blocks = B32::req_words(d+1);
   if(! (d & B32::block_mask())) { // New block.
-    /*
-    for(dim_id ii = 0; ii < d; ++ii) {
-      // FIXME: check for allocation errors
-      susp_succ[ii] = static_cast<uint64_t*>(realloc(susp_succ[ii], sizeof(uint64_t) * succ_blocks));
-      susp_succ[ii][B64::block(d)] = 0;
-    }
-    */
     rseen_words = static_cast<int*>(realloc(rseen_words, sizeof(int) * succ_blocks));
     rseen_end = rseen_words;
     rseen_bits = static_cast<uint32_t*>(realloc(rseen_bits, sizeof(uint32_t) * succ_blocks));
     rseen_bits[B32::block(d)] = 0;
   }
-  // susp_succ.push(static_cast<uint64_t*>(calloc(succ_blocks, sizeof(uint64_t))));
 
   susp_lb.push(new susp_sep); /* susp_lb.last()->growTo(d+1); */
   susp_ub.push(new susp_sep); /* susp_ub.last()->growTo(d+1); */
   susp_succ.push();
 
-  /*
-  dims.push(dim_info(this));
-  */
   lb_change.growTo(d+1); ub_change.growTo(d+1);
-  // lb_check.growTo(d+1); ub_check.growTo(d+1);
-  // GEAS_NOT_YET;
 
   // All the bookkeeping.
 
