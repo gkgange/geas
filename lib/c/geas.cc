@@ -3,6 +3,7 @@
 #include <geas/solver/branch.h>
 #include <geas/solver/priority-branch.h>
 #include <geas/engine/logging.h>
+#include <geas/constraints/difflogic.h>
 
 #include <geas/utils/defs.h>
 
@@ -239,6 +240,14 @@ brancher warmstart_brancher(atom* xs, int sz) {
   }
 
   return (brancher) geas::warmstart_brancher(decs);
+}
+
+brancher diff_order_brancher(solver s, var_choice varc, val_choice valc, intvar* xs, int sz) {
+  vec<geas::intvar> vars; 
+  for(intvar x : range(xs, xs+sz)) {
+    vars.push(*get_intvar(x));
+  }
+  return (brancher) geas::difflogic::branch_order(get_solver(s)->data, get_varc(varc), get_valc(valc), vars);
 }
 
 brancher toggle_brancher(brancher* ts, int sz) {

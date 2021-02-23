@@ -108,6 +108,7 @@ brancher new_bool_priority_brancher(var_choice, atom*, int, brancher*, int);
 brancher seq_brancher(brancher*, int);
 brancher limit_brancher(brancher);
 brancher warmstart_brancher(atom*,int);
+brancher diff_order_brancher(solver, var_choice, val_choice, intvar*,int);
 void add_brancher(solver, brancher);
 brancher get_brancher(solver);
 

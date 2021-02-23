@@ -79,6 +79,7 @@ brancher new_int_priority_brancher(var_choice varc,
 brancher seq_brancher([in,size_is(sz)] brancher bs[], int sz);
 brancher limit_brancher([in] brancher base);
 brancher warmstart_brancher([in, size_is(sz)] atom xs[], int sz);
+brancher diff_order_brancher([in] solver s, var_choice varc, val_choice valc, [in, size_is(sz)] intvar xs[], int sz);
 brancher toggle_brancher([in,size_is(sz)] brancher bs[], int sz);
 void add_brancher([in] solver s, [in] brancher b);
 brancher get_brancher([in] solver s);

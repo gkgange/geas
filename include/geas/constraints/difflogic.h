@@ -2,6 +2,7 @@
 #define GEAS__DIFFLOGIC__H
 #include <geas/solver/solver_data.h>
 #include <geas/vars/intvar.h>
+#include <geas/solver/branch.h>
 
 namespace geas {
 
@@ -14,6 +15,8 @@ namespace difflogic {
   }
   bool check_sat(solver_data* s, intvar x, intvar y, int k);
   bool check_sat(solver_data* s, ctx_t& ctx, intvar x, intvar y, int k);
+
+  brancher* branch_order(solver_data* s, VarChoice varc, ValChoice valc, vec<intvar>& xs);
 }
 
 }

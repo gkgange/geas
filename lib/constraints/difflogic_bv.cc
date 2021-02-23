@@ -514,7 +514,7 @@ bool diff_manager_bv::post(patom_t r, intvar x, intvar y, int k) {
 
         auto& s_succ(susp_succ[dx]);
         int d_block = B32::block(dy);
-        uint32_t d_bit = B32::bit(dy);
+        // uint32_t d_bit = B32::bit(dy);
         unsigned susp_idx = 0;
         for(susp_cell& cell : s_succ) {
           if(cell.block == d_block)
@@ -1321,6 +1321,246 @@ auto diff_manager_bv::get_rel(dim_id s, dim_id d) -> rel_id {
   return rel;
 }
 
+/*
+static pval_t diff_manager_bv::imp_init_bounds(void* ptr, int c_id, ctx_t& ctx) {
+  diff_manager_bv* man(static_cast<diff_manager_bv*>(ptr));
+  const cst_info& cst(man->csts[c_id]);
+  if(vars[cst.s].lb(ctx) - vars[cst.d].ub(ctx) <= cst.wt) {
+    return pval_inv(from_int(0));
+  }
+  return pval_inv(from_int(1));
+}
+
+static void diff_manager_bv::imp_ex_bounds(void* ptr, int c_id, pval_t val, vec<clause_elt>& expl) {
+  diff_manager_bv* man(static_cast<diff_manager_bv*>(ptr));
+  const cst_info& cst(man->csts[c_id]);
+  int s_lb = man->vars[cst.s].lb(man->s->ctx());
+  EX_PUSH(expl, man->vars[cst.s] < s_lb);
+  EX_PUSH(expl, man->vars[cst.d] >= s_lb - cst.wt);
+}
+
+static pval_t diff_manager_bv::imp_init_diff(void* ptr, int c_id, ctx_t& ctx) {
+  diff_manager_bv* man(static_cast<diff_manager_bv*>(ptr));
+  // 
+}
+
+static void eqat_ex_ub(void* ptr, int ei, pval_t val, vec<clause_elt>& elts) {
+  ivar_ext* ext(static_cast<ivar_ext*>(ptr));
+  if(pred_lb(ext->s, ext->p) > ext->vals[ei]) {
+    elts.push(le_atom(ext->p, ext->vals[ei]));
+  } else {
+    assert(pred_ub(ext->s, ext->p) < ext->vals[ei]);
+    elts.push(ge_atom(ext->p, ext->vals[ei]));
+  }
+}
+
+static void diff_manager_bv::finalize_bounds(solver_data* s, void* ptr, int ei) {
+  ivar_ext* ext(static_cast<ivar_ext*>(ptr));
+  pid_t x_pi = ext->p;
+  pval_t val = ext->vals[ei];
+  // patom_t at((*(ext->eqtable.find(val))).second);
+  patom_t at(VAL(*(ext->eqtable.find(val))));
+  add_clause_(s, at, ~patom_t(x_pi, val), patom_t(x_pi, val+1));
+}
+
+static void diff_manager_bv::finalize_diff(solver_data* s, void* ptr, int ei) {
+  ivar_ext* ext(static_cast<ivar_ext*>(ptr));
+  pid_t x_pi = ext->p;
+  pval_t val = ext->vals[ei];
+
+  patom_t at(VAL(*(ext->eqtable.find(val))));
+  add_clause_(s, ~at, patom_t(x_pi, val));
+  add_clause_(s, ~at, ~patom_t(x_pi, val+1));
+}
+*/
+
+// From variables with suspended successors, branch
+// on the activation variables.
+template<int ValC>
+struct branch_dim {
+  static forceinline int score_rel(solver_data* s, diff_manager_bv* man, int rel) {
+    const auto& r(man->rels[rel]);
+
+    switch(ValC) {
+    case Val_Min:
+      // We'll be enforcing the tightest constraint we can find, so rank by
+      // ub(y) + wt.
+      return r.wt + man->vars[r.d].ub(s->ctx());
+    case Val_Max:
+      // Negating the weakest suspended constraint. Because it's half-reif, not exactly
+      // the same as forcing rel.s later.
+      return -r.wt - man->vars[r.d].lb(s->ctx());
+    }
+  }
+
+  static forceinline patom_t branch_rel(solver_data* s, diff_manager_bv* man, int rel) {
+    int wt = man->rels[rel].wt;
+    int cst = man->rels[rel].sus_cst;
+
+    while(man->csts[cst].wt < wt) {
+      if(man->csts[cst].act.ub(s->ctx())
+         && !man->csts[cst].act.lb(s->ctx()))
+        break;
+      cst = man->csts[cst].diff_next;
+    }
+    switch(ValC) {
+    case Val_Min:
+      return man->csts[cst].act;
+    case Val_Max:
+      return ~man->csts[cst].act;
+    default:
+      GEAS_NOT_YET;
+      return at_False;
+    }
+  }
+
+  static forceinline patom_t branch_val(solver_data* s, intvar x) {
+    // Not yet fixed.
+    assert(x.lb(s->ctx()) < x.ub(s->ctx()));
+
+    switch(ValC) {
+    case Val_Min:
+      return x <= x.lb(s->ctx());
+    case Val_Max:
+      return x >= x.ub(s->ctx());
+    default:
+      GEAS_NOT_YET;
+      return at_Error;
+    }
+  }
+};
+
+template<int VarC>
+struct branch_score {
+  static forceinline int score(solver_data* s, intvar x) {
+    switch(VarC) {
+    case Var_Smallest:
+      return x.lb(s->ctx());
+    case Var_Largest:
+      return -x.ub(s->ctx());
+    case Var_FirstFail:
+      return x.ub(s->ctx()) - x.lb(s->ctx());
+    default:
+      GEAS_NOT_YET;
+      return 0;
+    }
+  }
+};
+
+template<int VarC, int ValC>
+class diff_order_branch : public geas::brancher {
+public:
+  diff_order_branch(solver_data* s, vec<intvar>& xs)
+    : begin(nullptr) {
+    auto man = diff_manager_bv::get(s);
+    for(intvar x : xs)
+      dims.push(man->get_dim(x));
+
+    begin.x = dims.begin();
+  }
+
+  ~diff_order_branch(void) { }
+
+  inline bool rel_has_suspended(solver_data* s, diff_manager_bv* man, int rel) {
+    int wt = man->rels[rel].wt;
+    int cst = man->rels[rel].sus_cst;
+
+    while(man->csts[cst].wt < wt) {
+      if(man->csts[cst].act.ub(s->ctx())
+         && !man->csts[cst].act.lb(s->ctx()))
+        return true;
+      cst = man->csts[cst].diff_next;
+    }
+    return false;
+  }
+  /*
+  inline bool dim_has_suspended(solver_data* s, diff_manager_bv* man, int dim) {
+    if(man->susp_lb[dim]->empty())
+      return false;
+
+    const auto& susp_lb(*man->susp_lb[dim]);
+    for(int ii = 0; ii < susp_lb.heap.size(); ++ii) {
+      if(rel_has_suspended(s, man, susp_lb.rel[susp_lb.heap[ii]]))
+        return true;
+    }
+    return false;
+  }
+  */
+  
+  inline int* filter(solver_data* s) {
+    auto man = diff_manager_bv::get(s);
+    int* dest = begin;
+    int* it = begin;
+    int* en = dims.end();
+
+    for(; it != en; ++it) {
+      if(man->vars[*it].is_fixed(s->ctx())) {
+        std::swap(*dest, *it);
+        ++dest;
+      }
+    }
+    return dest;
+  }
+
+  patom_t branch(solver_data* s) {
+    auto man =  diff_manager_bv::get(s);
+
+    // Pick only unfixed variables.
+    auto it = filter(s);
+    auto end = dims.end();
+    if(it == end)
+      return at_Undef;
+
+    // Pick the origin dim.
+    int sel = *it;
+    int sel_lb = branch_score<VarC>::score(s, man->vars[sel]);
+    for(++it; it != end; ++it) {
+      int curr_lb = branch_score<VarC>::score(s, man->vars[*it]);
+      if(curr_lb < sel_lb) {
+        curr_lb = sel_lb;
+        sel = *it;
+      }
+    }
+
+    // Now we've picked the origin dim.
+    // Branch first on any un-ground orderings.
+    susp_sep& s_sep(*man->susp_lb[sel]);
+
+    // Pick the end-point with smallest upper bound.
+    int ii = 0;
+    for(; ii < s_sep.heap.size(); ++ii) {
+      if(rel_has_suspended(s, man, s_sep.rel[s_sep.heap[ii]]))
+        goto found_susp_rel;
+    }
+    // No suspended relation found. Just branch on the domain.
+    return branch_dim<ValC>::branch_val(s, man->vars[sel]);
+
+found_susp_rel:
+    auto sel_rel = s_sep.rel[s_sep.heap[ii]];
+    int sel_score = branch_dim<ValC>::score_rel(s, man, sel_rel);
+
+    for(++ii; ii < s_sep.heap.size(); ++ii) {
+      auto rel = s_sep.rel[s_sep.heap[ii]];
+      if(!rel_has_suspended(s, man, rel))
+        continue;
+      int rel_score = branch_dim<ValC>::score_rel(s, man, rel);
+      if(rel_score < sel_score) {
+        sel_rel = rel;
+        sel_score = rel_score;
+      }
+    }
+    return branch_dim<ValC>::branch_rel(s, man, sel_rel);
+  }
+  
+  bool is_fixed(solver_data* s) {
+    filter(s);
+    return begin < dims.end();
+  }
+
+  vec<int> dims;
+  trailed<int*> begin;
+};
+  
 void diff_manager_bv::report_internal(void) {
 #ifdef REPORT_INTERNAL_STATS
   fprintf(stderr, "%% DIFF-BV(%d) : %d executions, %d lb, %d ub, %d bnd, %d diff\n",
@@ -1338,6 +1578,35 @@ namespace difflogic {
 bool post_bv(solver_data* s, patom_t r, intvar x, intvar y, int k) {
   diff_manager_bv* man(diff_manager_bv::get(s));  
   return man->post(r, x, y, k);
+}
+
+template<int VarC>
+brancher* _branch_order(solver_data* s, ValChoice valc, vec<intvar>& xs) {
+  switch(valc) {
+  case Val_Min:
+    return new diff_order_branch<VarC, Val_Min>(s, xs);
+  case Val_Max:
+    return new diff_order_branch<VarC, Val_Max>(s, xs);
+  default:
+    GEAS_NOT_YET;
+    return nullptr;
+  }
+}
+
+brancher* branch_order(solver_data* s, VarChoice varc, ValChoice valc, vec<intvar>& xs) {
+  // diff_manager_bv* man(diff_manager_bv::get(s));  
+  switch(varc) {
+  case Var_Smallest:
+    return _branch_order<Var_Smallest>(s, valc, xs);
+  case Var_Largest:
+    return _branch_order<Var_Largest>(s, valc, xs);
+  case Var_FirstFail:
+    return _branch_order<Var_FirstFail>(s, valc, xs);
+  default:
+    GEAS_NOT_YET;
+    return nullptr;
+  }
+  //  brancher* b = new diff_order_branch(s, xs);
 }
 
 }

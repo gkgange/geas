@@ -160,7 +160,7 @@ let force_array_bvars env expr =
 
 let is_search_ann ann =
   match ann with
-  | Pr.Ann_call (("seq_search"|"int_search"|"bool_search"|"bool_priority"|"int_priority"), _) -> true
+  | Pr.Ann_call (("seq_search"|"int_search"|"bool_search"|"bool_priority"|"int_priority"|"warm_start"|"int_order"), _) -> true
   | _ -> false
 
 let rec parse_branching problem env solver ann =
@@ -194,6 +194,11 @@ let rec parse_branching problem env solver ann =
     assert (Array.length xs = Array.length cs) ;
     Sol.warmstart_brancher
       (Array.init (Array.length xs) (fun i -> Sol.ivar_eq xs.(i) cs.(i)))
+  | Pr.Ann_call ("int_order", args) ->
+    let varb = get_var_branch args.(1) in
+    let valb = get_val_branch args.(2) in
+    let vars = collect_array_ivars env (Pr.resolve_ann problem args.(0)) in
+    Sol.diff_order_brancher solver varb valb vars
   | _ -> failwith "Unknown search annotation"
 
 let rec parse_branchings problem env solver anns =
