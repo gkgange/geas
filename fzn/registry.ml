@@ -860,7 +860,7 @@ let initialize () =
      "int_eq_imp", int_eq_imp ;
      "int_ne_reif", int_ne_reif ;
      "int_ne_HR", int_ne_HR ;
-     "int_ne_imp", int_ne_HR ;
+     "int_ne_imp", int_ne_imp ;
      "bool2int", bool2int ;
      "bool_eq", bool_eq ;
      "bool_eq_reif", bool_eq_reif ;
