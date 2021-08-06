@@ -2,6 +2,7 @@
 #define GEAS__BITOPS__H
 // Helper header for doing stuff on BitMaps.
 #include <cstring>
+#include <stdint.h>
 
 namespace geas {
   namespace B32 {

@@ -432,7 +432,7 @@ public:
     return (e == leaf->elt);
   }
 
-  iterator find(elt_t e) {
+  iterator find(const elt_t& e) const {
     if(root == NULL)
       return NULL;
 
@@ -440,8 +440,8 @@ public:
     return (e == leaf->ref.key) ? leaf : NULL;
   }
 
-  iterator begin(void) { return head; }
-  iterator end(void) { return NULL; }
+  iterator begin(void) const { return head; }
+  iterator end(void) const { return NULL; }
 protected:
   void free_node(void* ptr)
   {
@@ -482,7 +482,7 @@ protected:
   }
 
   // Find the leaf where [elt] would reside
-  leaf_t* locate(elt_t& elt)
+  leaf_t* locate(const elt_t& elt) const
   {
     if(root == NULL)
       return NULL;
