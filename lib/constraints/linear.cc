@@ -306,7 +306,8 @@ class lin_le_inc : public propagator, public prop_inst<lin_le_inc> {
     if(status&S_Red)
       return Wt_Keep;
 
-    trail_change(s->persist, slack, slack - delta(xs[xi].c, xs[xi].x.p));
+    // trail_change(s->persist, slack, slack - delta(xs[xi].c, xs[xi].x.p));
+    slack.set(s->persist, slack - delta(xs[xi].c, xs[xi].x.p));
 #ifdef CHECK_STATE
     // Might not have processed all watches yet
     assert(slack >= k - compute_lb());
@@ -377,7 +378,8 @@ class lin_le_inc : public propagator, public prop_inst<lin_le_inc> {
           */
       // Initialize lower bound
       for(const elt& e : xs)
-        slack -= e.c * lb_prev(e.x);
+        //slack -= e.c * lb_prev(e.x);
+        slack.x -= e.c * lb_prev(e.x);
       // Tighten upper bound, and compute threshold? 
       if(s->state.is_entailed(r)) {
         status = S_Active;
@@ -554,7 +556,8 @@ class lin_le_inc : public propagator, public prop_inst<lin_le_inc> {
     int k;
 
     // Persistent state
-    int slack;
+    // int slack;
+    Tint slack;
     // int threshold;
     Tint threshold;
     char status;
