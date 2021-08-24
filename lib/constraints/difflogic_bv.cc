@@ -12,6 +12,8 @@
 #include <geas/mtl/bool-set.h>
 #include <geas/mtl/min-tree.h>
 
+#define LATE_DIFFLOGIC
+
 using namespace geas;
 
 // Re-implementation of the difference-logic propagator. Core algorithms
@@ -223,6 +225,10 @@ public:
   boolset rseen;
   Heap<cmp_rev_dist> rqueue;
 
+#ifdef LATE_DIFFLOGIC
+  vec<int> stackpred;
+#endif
+  
   //=====================
   // Persistence management
   //=====================
@@ -390,7 +396,10 @@ public:
   bool process_killed(cst_id c, vec<clause_elt>& confl);
   bool propagate_if_killed(cst_id c, cst_id e, vec<clause_elt>& confl);
   
-  void untrail(void);
+  inline void untrail(void) {
+    if(susp_trail_sz != susp_trail.size())
+      untrail_to(susp_trail_sz);
+  }
   void untrail_to(unsigned sz);
   void suspend_cst(cst_id ci);
    
@@ -560,6 +569,7 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
   if(vars[cst.s].ub(s) - vars[cst.d].lb(s) <= cst.wt)
     return true;
 
+#ifndef LATE_DIFFLOGIC
   if(pot[cst.s] + cst.wt - pot[cst.d] < 0 &&
      !repair_potential(cst.s, cst.d, cst.wt)) {
     // Collect the corresponding failure, and abort.
@@ -585,6 +595,7 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
   }
   fpred[cst.d] = ci;
   fill_fdist(cst.s, cst.d, cst.wt);
+#endif
   susp_trail.push(susp_trail_entry(diff.cst, ci));
 
   if(diff.cst) {
@@ -604,16 +615,35 @@ bool diff_manager_bv::activate(cst_id ci, vec<clause_elt>& confl) {
   // If nothing got closer, the constraint
   // we attempted to add was redundant.
 
+  bool okay = true;
+#ifdef LATE_DIFFLOGIC
+  // Just enqueue the source and destination.
+  int d_lb = lb(vars[cst.s]) - cst.wt;
+  if(d_lb > lb(vars[cst.d])) {
+    if(!set_lb(vars[cst.d], d_lb, expl<&P::ex_lb>(ci)))
+      return false;
+    if(!lb_change.elem(cst.d))
+      lb_change.add(cst.d);
+  }
+  int s_ub = ub(vars[cst.d]) + cst.wt;
+  if(ub(vars[cst.s]) > s_ub) {
+    if(!set_ub(vars[cst.s], s_ub, expl<&P::ex_ub>(ci)))
+      return false;
+    if(!ub_change.elem(cst.s))
+      ub_change.add(cst.s);
+  }
+#else
   // Set up the bitmap for process_suspended.
   for(int v : rseen_vars)
     bv_insert(rseen_end, rseen_bits, v);
-  bool okay = process_suspended(cst.wt)
+  okay = process_suspended(cst.wt)
     && process_act_bounds(cst.s, cst.d);
 
   // Clear transient state
   bv_clear(rseen_words, rseen_end, rseen_bits);
   rseen_vars.clear();
   fseen_vars.clear();
+#endif
 
   return okay;
 }
@@ -822,11 +852,34 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
 #ifdef REPORT_INTERNAL_STATS
         lb_count++;
 #endif
+
+#ifdef LATE_DIFFLOGIC
+        if(stackpred[act.dim]) {
+          // Inconsistent.
+          vec<clause_elt>& confl(this->s->infer.confl);
+          confl.clear();
+          int curr = s;
+          while(curr != act.dim) {
+            int pred_id = stackpred[curr];
+            EX_PUSH(confl, ~csts[pred_id].act);
+            curr = csts[pred_id].s;
+          }
+          EX_PUSH(confl, ~csts[act.cst_id].act);
+          return false;
+        }
+#endif
+
       if(!set_lb(vars[act.dim], s_lb - act.wt,
                  expl<&P::ex_lb>(act.cst_id)))
         return false;
-      if(!process_lb_change(act.dim))
-        return false;
+#ifdef LATE_DIFFLOGIC
+      stackpred[act.dim] = act.cst_id;
+#endif
+      bool okay = process_lb_change(act.dim);
+#ifdef LATE_DIFFLOGIC
+      stackpred[act.dim] = 0;
+#endif
+      if(!okay) return false;
     }
   }
 
@@ -893,11 +946,34 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
 #ifdef REPORT_INTERNAL_STATS
         ub_count++;
 #endif
+
+#ifdef LATE_DIFFLOGIC
+        if(stackpred[act.dim]) {
+          // Inconsistent cycle
+          vec<clause_elt>& confl(this->s->infer.confl);
+          confl.clear();
+          int curr = d;
+          while(curr != act.dim) {
+            int succ_id = stackpred[curr];
+            EX_PUSH(confl, ~csts[succ_id].act);
+            curr = csts[succ_id].s;
+          }
+          EX_PUSH(confl, ~csts[act.cst_id].act);
+          return false;
+        }
+#endif
       if(!set_ub(vars[act.dim], d_ub + act.wt,
                  expl<&P::ex_ub>(act.cst_id)))
         return false;
-      if(!process_ub_change(act.dim))
-        return false;
+
+#ifdef LATE_DIFFLOGIC
+      stackpred[act.dim] = act.cst_id;
+#endif
+      bool okay = process_ub_change(act.dim);
+#ifdef LATE_DIFFLOGIC
+      stackpred[act.dim] = 0;
+#endif
+      if(!okay) return false;
     }
   }
 
@@ -1021,7 +1097,6 @@ void diff_manager_bv::untrail_to(unsigned sz) {
   }
   susp_trail._size() = sz;
 }
-void diff_manager_bv::untrail(void) { untrail_to(susp_trail_sz); }
                                         
 // ===========
 // Explanation
@@ -1265,6 +1340,10 @@ auto diff_manager_bv::get_dim(intvar x) -> dim_id {
   flag.push(0);
   fdist.push(0); fpred.push(INT_MAX); fseen.growTo(d+1);
   rdist.push(0); rpred.push(INT_MAX); rseen.growTo(d+1);
+
+#ifdef LATE_DIFFLOGIC
+  stackpred.push(0);
+#endif
 
   fwd.push();
   rev.push();
