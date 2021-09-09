@@ -13,6 +13,7 @@
 #include <geas/mtl/min-tree.h>
 
 #define LATE_DIFFLOGIC
+#define STRONGER_REDUNDANCY
 
 using namespace geas;
 
@@ -392,6 +393,8 @@ public:
 
   bool process_lb_change(dim_id d);
   bool process_ub_change(dim_id d);
+  bool process_suspended_lb(dim_id d);
+  bool process_suspended_ub(dim_id d);
 
   bool process_killed(cst_id c, vec<clause_elt>& confl);
   bool propagate_if_killed(cst_id c, cst_id e, vec<clause_elt>& confl);
@@ -883,7 +886,13 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
     }
   }
 
+  return process_suspended_lb(s);
+}
+
+bool diff_manager_bv::process_suspended_lb(dim_id s) {
   // Now check the suspended constraints.
+  int s_lb = lb(vars[s]);
+  int s_ub = ub(vars[s]);
   auto& s_susp(*susp_lb[s]);
   while(!s_susp.heap.empty()) {
     int rel_idx = s_susp.heap.getMin();
@@ -895,10 +904,12 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
       break;
 
     int d_ub = ub(vars[d]);
+    int d_lb = lb(vars[d]);
     int diff_min = s_lb - d_ub;
     //    diff_info& diff(get_info(s, d));
     int sus_wt = diff.sus_wt;
     int sus_cst = diff.sus_cst;
+    int diff_max = std::min(diff.wt, (int) (s_ub - lb(vars[d])));
     if(sus_wt < diff_min) {
       csts[sus_cst].sus_sep = s_susp.sep[rel_idx];
       susp_trail.push(susp_trail_entry(sus_cst, 0));
@@ -916,15 +927,26 @@ bool diff_manager_bv::process_lb_change(dim_id s) {
       diff.sus_wt = sus_wt;
       diff.sus_cst = sus_cst;
 
-      if(diff.wt <= sus_wt) {
+      if(diff_max <= sus_wt) {
         // Remaining suspended constraints are redundant.
         s_susp.heap.removeMin();
         susp_ub[d]->heap.remove(diff.ub_idx);
         susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
         continue;
       }
+    } else if(diff_max <= sus_wt) {
+#ifdef STRONGER_REDUNDANCY
+      // Remaining suspended constraints are redundant.
+      csts[sus_cst].sus_sep = s_susp.sep[rel_idx];
+      susp_trail.push(susp_trail_entry(sus_cst, 0));
+      s_susp.heap.removeMin();
+      susp_ub[d]->heap.remove(diff.ub_idx);
+      susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
+      continue;
+#endif
     }
     assert(sus_wt >= diff_min);
+
     // For now, put the threshold tight against the ub.
     int sep_new = d_ub + sus_wt;
     s_susp.sep[rel_idx] = sep_new;
@@ -977,6 +999,12 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
     }
   }
 
+  return process_suspended_ub(d);
+}
+
+bool diff_manager_bv::process_suspended_ub(dim_id d) {
+  int d_ub = ub(vars[d]);
+  int d_lb = lb(vars[d]);
   auto& d_susp(*susp_ub[d]);
   while(!d_susp.heap.empty()) {
     // int s = d_susp.heap.getMin();
@@ -993,6 +1021,7 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
     //    diff_info& diff(get_info(s, d));
     int sus_wt = diff.sus_wt;
     int sus_cst = diff.sus_cst;
+    int diff_max = std::min(diff.wt, (int) (ub(vars[s]) - d_lb));
     if(sus_wt < diff_min) {
       csts[sus_cst].sus_sep = -d_susp.sep[rel_idx] + sus_wt;
       susp_trail.push(susp_trail_entry(sus_cst, 0));
@@ -1010,15 +1039,26 @@ bool diff_manager_bv::process_ub_change(dim_id d) {
       diff.sus_wt = sus_wt;
       diff.sus_cst = sus_cst;
 
-      if(diff.wt <= sus_wt) {
+      if(diff_max <= sus_wt) {
         // Remaining suspended constraints are redundant.
         d_susp.heap.removeMin();
         susp_lb[s]->heap.remove(diff.lb_idx);
         susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
         continue;
       }
+    } else if(diff_max <= sus_wt) {
+#ifdef STRONGER_REDUNDANCY
+      // Remaining suspended constraints are redundant.
+      csts[sus_cst].sus_sep = -d_susp.sep[rel_idx] + sus_wt;
+      susp_trail.push(susp_trail_entry(sus_cst, 0));
+      d_susp.heap.removeMin();
+      susp_lb[s]->heap.remove(diff.lb_idx);
+      susp_succ[s][diff.susp_block].mask &= ~B32::bit(d);
+      continue;
+#endif
     }
     assert(sus_wt >= diff_min);
+                            
     // For now, put the threshold tight against the ub.
     int sep_new = s_lb;
     d_susp.sep[rel_idx] = -sep_new +sus_wt;
