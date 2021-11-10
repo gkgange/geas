@@ -633,8 +633,10 @@ bool diff_manager::post(patom_t r, intvar x, intvar y, int k) {
     // Already active
     // check_potential();
 
-    if(pot[dx] + k - pot[dy] < 0 && !repair_potential(dx, dy, k))
+    if(pot[dx] + k - pot[dy] < 0 && !repair_potential(dx, dy, k)) {
+      s->solver_is_consistent = false;
       return false;
+    }
     
     di.r = r;
     di.is_active = true;

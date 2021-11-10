@@ -1940,8 +1940,10 @@ protected:
 */
 
 bool pred_leq(solver_data* s, pid_t x, pid_t y, int k) {
-  if(pred_ub(s, y) + k < pred_lb(s, x))
+  if(pred_ub(s, y) + k < pred_lb(s, x)) {
+    s->solver_is_consistent = false;
     return false;
+  }
 
   if(!enqueue(*s, ge_atom(y, pred_lb(s, x) - k), reason()))
     return false;
@@ -1980,8 +1982,10 @@ bool int_leq(solver_data* s, intvar x, intvar y, int k) {
 bool int_le(solver_data* s, intvar x, intvar y, int k, patom_t r) {
   if(s->state.is_inconsistent(r))
     return true;
-  if(s->state.is_entailed(r) && y.ub(s) + k < x.lb(s))
+  if(s->state.is_entailed(r) && y.ub(s) + k < x.lb(s)) {
+    s->solver_is_consistent = false;
     return false;
+  }
 
 #ifdef USE_DIFFLOGIC
   if(s->opts.global_diff)
