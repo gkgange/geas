@@ -504,86 +504,683 @@ public:
   leaf_t* tail;
 };
 
-/*
-template<class V>
-class int_triemap {
-  enum { mask = 1<<31 };
-public:
-  int_triemap( )
-  { }
-
-  void add(int t) { impl.add(((unsigned int)t)^mask); }
-  bool find(int t) { return impl.find(((unsigned int) t)^mask); }
-  void rem(int t) { impl.rem(((unsigned int) t)^mask); }
-   
-  class iterator {
-  public:
-    iterator(uint_trie::iterator _it)
-      : it(_it)
-    { }
-
-    iterator& operator++() {
-      ++it; return *this;
-    }
-    int operator*() const { return (*it)^mask; }
-    bool operator!=(const iterator& other)
-    { return it != other.it; }
-  protected:
-    uint_trie::iterator it;
-  };
-  iterator begin() { return iterator(impl.begin()); }
-  iterator end() { return iterator(impl.end()); }
-protected:
-  uint_trie impl;
-};
-
-class float_trie {
-//  enum { mask = 3<<30 };
-  enum { mask = 1<<31 };
+// Slightly different tradeoffs than the triemap.
+class trieset {
+  typedef uintptr_t elt_t;
+  enum { KEY_BITS = 8*sizeof(elt_t) };
   
-  static unsigned int to_uint(float t)
-  {
-    int t_int = *(reinterpret_cast<int*>(&t));
-    if(t_int < 0)
-      t_int = 0x80000000 - t_int;
-    return mask^(t_int);
-  }
+private:
+  trieset(trieset& o) = delete;
+  trieset& operator=(trieset& o) = delete;
 
-  static float from_uint(unsigned int t)
-  {
-    int t_int = (int) (t^mask);
-    if(t_int < 0)
-      t_int = 0x80000000 - t_int;
-    return *(reinterpret_cast<float*>(&t_int));
+protected:
+  // Internal and leaf nodes
+  struct node_t;
+  
+  class ref_t {
+    ref_t(uintptr_t _p) : p(_p) { }
+  public:
+    ref_t(void) : p(0) { }
+    static ref_t of_key(uint64_t x) { return ref_t((x<<1) | 1); }
+    static ref_t of_node(node_t* ptr) { return reinterpret_cast<uintptr_t>(ptr); }
+    static ref_t nil(void) { return ref_t(0); }
+
+    bool is_nil(void) const { return !p; }
+    bool is_branch(void) const { return ! (p&1); }
+    bool is_key(void) const { return p&1; }
+
+    uintptr_t key(void) const { return p>>1; }
+    node_t* branch(void) const { return reinterpret_cast<node_t*>(p); }
+
+    inline int dir(uintptr_t key) const {
+      return ((key | branch()->mask)+1) >> (KEY_BITS-1);
+    }
+    inline ref_t child(uintptr_t key) const { return branch()->child[dir(key)]; }
+    
+    uintptr_t p;
+  };
+
+  struct node_t {
+    uintptr_t mask;
+    ref_t child[2];
+  };
+
+  static inline int _dir(node_t* b, elt_t e) {
+    return ( (b->mask | e)+1 ) >> (KEY_BITS-1);
   }
+ 
 public:
-  float_trie( )
-  { }
-
-  void add(float t) { impl.add(to_uint(t)); }
-  bool find(float t) { return impl.find(to_uint(t)); }
-  void rem(float t) { impl.rem(to_uint(t)); }
-   
+  // Two ways we can implement an iterator: stack-based, or successor based.
   class iterator {
   public:
-    iterator(uint_trie::iterator _it)
-      : it(_it)
-    { }
-
-    iterator& operator++() {
-      ++it; return *this;
+    iterator(ref_t _root)
+      : root(_root) {
+      if(root.is_nil()) {
+        key = UINTPTR_MAX;
+      } else {
+        ref_t ref = root;
+        while(ref.is_branch())
+          ref = ref.branch()->child[1];
+        key = ref.key();
+      }
     }
-    float operator*() const { return from_uint((*it)); }
-    bool operator!=(const iterator& other)
-    { return it != other.it; }
-  protected:
-    uint_trie::iterator it;
+    iterator(ref_t _root, uintptr_t _key)
+      : root(_root), key(_key) { }
+
+    iterator& operator++(void) {
+      // Navigate towards key, remember
+      // the most recent right branch.
+      ref_t curr = root;
+      ref_t alt = ref_t::nil();
+
+      while(curr.is_branch()) {
+        int dir = curr.dir(key);
+        if(dir)
+          alt = curr.branch()->child[0];
+        curr = curr.branch()->child[dir];
+      }
+
+      if(alt.is_nil()) {
+        key = UINTPTR_MAX;
+      } else {
+        while(alt.is_branch()) {
+          alt = alt.branch()->child[1];
+        }
+        key = alt.key();
+      }
+      return *this;
+    }
+    elt_t operator*(void) const {
+      return key;
+    }
+    bool operator!=(const iterator& o) const {
+      return key != o.key;
+    }
+
+    ref_t root;
+    elt_t key;
   };
-  iterator begin() { return iterator(impl.begin()); }
-  iterator end() { return iterator(impl.end()); }
+
+  trieset(void)
+    : root(ref_t::nil())
+  { } 
+
+  trieset(trieset&& o)
+    : root(o.root) {
+    o.root = ref_t::nil();
+  }
+
+  trieset& operator=(trieset&& o) {
+    root = o.root; o.root = ref_t::nil();
+    return *this;
+  }
+
+  ~trieset()
+  {
+    if(!root.is_nil())
+      free_node(root);
+  }
+
+  void remove(elt_t e)
+  {
+    if(root.is_nil())
+      return;
+
+    ref_t p = root;
+    node_t* q = nullptr;
+
+    ref_t* whereq = nullptr;
+    ref_t* wherep = &(root);
+    uint64_t dir;
+
+    while(p.is_branch()) {
+      whereq = wherep;
+      q = p.branch();
+      dir = _dir(q, e);
+      wherep = q->child + dir;
+      p = *wherep;
+    }
+
+    // If value not in the trie, terminate
+    uintptr_t leaf = p.key();
+    if(e != leaf)
+      return;
+    
+    // Collapse the last decision.
+    if(!whereq)
+    {
+      root = ref_t::nil();
+      return;
+    }
+    (*whereq) = q->child[1 - dir];
+    delete q;
+  }
+
+  bool mem(elt_t e) {
+    if(root.is_nil())
+      return false;
+
+    elt_t leaf = locate(e);
+    return (e == leaf);
+  }
+
+  void add(elt_t elt) {
+    if(root.is_nil()) {
+      root = ref_t::of_key(elt);
+      return;
+    }
+
+    elt_t leaf = locate(elt);
+    if(leaf == elt)
+      return;
+
+    // Actually the complement of the mask we'll
+    // eventually add.
+    elt_t delta = leaf ^ elt;
+
+    ref_t* dest = &root;
+    node_t* br = nullptr;
+    while(dest->is_branch()) {
+      br = dest->branch();
+      // Check whether the next branch drops beneath the
+      // first changed bit.
+      if( (br->mask+1) & delta )
+        break;
+      dest = br->child + _dir(br, elt);
+    }
+
+    // Construct the new node.
+    uintptr_t msb = get_msb(delta);
+    // High child goes on the left.
+    ref_t ref = (msb & elt) ? make_node(~msb, ref_t::of_key(elt), *dest)
+      : make_node(~msb, *dest, ref_t::of_key(elt));
+    *dest = ref;
+  }
+
+  iterator begin(void) const { return iterator(root); }
+  iterator end(void) const { return iterator(root, UINTPTR_MAX); }
 protected:
-  uint_trie impl;
+  void free_node(ref_t ref) {
+    if(!ref.is_branch())
+      return;
+
+    node_t* ptr(ref.branch());
+    free_node(ptr->child[0]);
+    free_node(ptr->child[1]);
+    delete ptr;
+  }
+
+  ref_t make_node(uint64_t mask, ref_t left, ref_t right)
+  {
+    node_t* ptr = new node_t;
+    ptr->mask = mask;
+    ptr->child[0] = left;
+    ptr->child[1] = right;
+    
+    return ref_t::of_node(ptr);
+  }
+
+  // Extract the most significant 1-bit
+  uint64_t get_msb(uint64_t x)
+  {
+    // Alternatively, use bit-smearing.
+    // return (1<<(31-__builtin_clz(x)));
+    static_assert(sizeof(uint64_t) == sizeof(unsigned long long),
+      "uint64_trie: compiler intrinsic for wrong bit-width");
+    return ((uint64_t) 1)<<(63-__builtin_clzll(x));
+  }
+
+  // Find the leaf where [elt] would reside
+  elt_t locate(elt_t elt) const {
+    assert(!root.is_nil());
+
+    ref_t ref = root;
+    // While we're at an internal node
+    while(ref.is_branch()) {
+      ref = ref.child(elt);
+    }
+    return ref.key();
+  }
+
+  ref_t root;
 };
-*/
+
+// Helper structure for the stack-based
+// iterator, so we don't have a bunch of
+// allocation.
+
+class triemap_iterator_buffer {
+  uintptr_t buf[64];
+ public:
+  const uintptr_t& operator[](int i) const { return buf[i]; }
+  uintptr_t& operator[](int i) { return buf[i]; }
+};
+
+// Yet another *slightly* different trie variant.
+// TODO: unify as many of these as is possible.
+template<class V>
+class triemap {
+  typedef uintptr_t elt_t;
+  enum { KEY_BITS = 8*sizeof(elt_t) };
+  
+private:
+  // We take ownership of our nodes, so 
+  triemap(triemap<V>& o) = delete;
+  triemap& operator=(triemap<V>& o) = delete;
+
+protected:
+  // Internal and leaf nodes
+  struct node_t;
+  struct leaf_t;
+  
+  class ref_t {
+    ref_t(uintptr_t _p) : p(_p) { }
+  public:
+    ref_t(void) : p(0) { }
+    static ref_t of_leaf(leaf_t* ptr) { return reinterpret_cast<uintptr_t>(ptr) | 1; }
+    static ref_t of_node(node_t* ptr) { return reinterpret_cast<uintptr_t>(ptr); }
+    static ref_t nil(void) { return ref_t(0); }
+
+    static ref_t of_uint(uintptr_t p) { return ref_t(p); }
+    uintptr_t to_uint(void) const { return p; }
+
+    bool is_nil(void) const { return !p; }
+    bool is_branch(void) const { return ! (p&1); }
+    bool is_leaf(void) const { return p&1; }
+
+    leaf_t* leaf(void) const { return reinterpret_cast<leaf_t*>(p & ~1ull); }
+    node_t* branch(void) const { return reinterpret_cast<node_t*>(p); }
+
+    inline int dir(uintptr_t key) const {
+      return ((key | branch()->mask)+1) >> (KEY_BITS-1);
+    }
+    inline ref_t child(uintptr_t key) const { return branch()->child[dir(key)]; }
+    
+    uintptr_t p;
+  };
+
+  struct node_t {
+    uintptr_t mask;
+    ref_t child[2];
+  };
+  struct leaf_t {
+    leaf_t(uint64_t _key, V _value) : key(_key), value(_value) { }
+    uint64_t key;
+    V value;
+  };
+
+  static inline int _dir(node_t* b, elt_t e) {
+    return ( (b->mask | e)+1 ) >> (KEY_BITS-1);
+  }
+ 
+public:
+  // Two ways we can implement an iterator: stack-based, or successor based.
+  class iterator {
+  public:
+    iterator(ref_t _root)
+      : root(_root) {
+      if(root.is_nil()) {
+        leaf = nullptr;
+      } else {
+        ref_t ref = root;
+        while(ref.is_branch())
+          ref = ref.branch()->child[1];
+        leaf = ref.leaf();
+      }
+    }
+    iterator(ref_t _root, leaf_t* _leaf)
+      : root(_root), leaf(_leaf) { }
+
+    iterator& operator++(void) {
+      // Navigate towards key, remember
+      // the most recent right branch.
+      ref_t curr = root;
+      ref_t alt = ref_t::nil();
+
+      uint64_t key(leaf->key);
+
+      while(curr.is_branch()) {
+        int dir = curr.dir(key);
+        if(dir)
+          alt = curr.branch()->child[0];
+        curr = curr.branch()->child[dir];
+      }
+
+      if(alt.is_nil()) {
+        leaf = nullptr;
+      } else {
+        while(alt.is_branch()) {
+          alt = alt.branch()->child[1];
+        }
+        leaf = alt.leaf();
+      }
+      return *this;
+    }
+    leaf_t* operator*(void) const {
+      return leaf;
+    }
+    bool operator!=(const iterator& o) const {
+      return leaf != o.leaf;
+    }
+
+    ref_t root;
+    leaf_t* leaf;
+  };
+
+  struct ref_stack {
+  public:
+    /*
+    ref_stack(triemap_iterator_buffer& _buf, int _sz)
+    : buf(_buf), sz(_sz) { }
+    */
+    ref_stack(triemap_iterator_buffer& _buf)
+    : buf(_buf), sz(0) { }
+
+    bool is_empty(void) const { return !sz; }
+    ref_t pop(void) {
+      assert(sz);
+      --sz;
+      return ref_t::of_uint(buf[sz]);
+    }
+    void push(ref_t ref) {
+      buf[sz++] = ref.to_uint();
+    }
+    void clear(void) { sz = 0; }
+
+    const ref_t& top(void) const { assert(sz); return buf[sz-1]; }
+
+    triemap_iterator_buffer& buf;
+    int sz;
+  };
+
+  template<bool Bwd = false>
+  struct stack_iterator {
+  stack_iterator(triemap_iterator_buffer& _buf)
+    : stack(ref_stack(_buf)), top(nullptr) { }
+
+    // Only well-behaved for end().
+    bool operator!=(const stack_iterator<Bwd>& o) { return top != o.top; }
+
+    stack_iterator<Bwd>& operator++(void) {
+      if(stack.is_empty()) {
+        top = nullptr;
+      } else {
+        ref_t p = stack.pop();
+        while(!p.is_leaf()) {
+          stack.push(p.branch()->child[Bwd]);
+          p = p.branch()->child[1 - Bwd];
+        }
+        top = p.leaf();
+      }
+      return *this;
+    }
+    leaf_t& operator*(void) const { return *top; }
+
+    ref_stack stack;
+    leaf_t* top;
+  };
+
+
+  template<bool Bwd=false>
+  stack_iterator<Bwd> dir_iter_begin(triemap_iterator_buffer& buf) {
+    stack_iterator<Bwd> it(buf);
+    if(!root.is_nil()) {
+      auto p = root;
+      while(!p.is_leaf()) {
+        it.stack.push(p.branch()->child[Bwd]);
+        p = p.branch()->child[1 - Bwd];
+      }
+      it.top = p.leaf();
+    }
+    return it;
+  }
+
+  // Precondition: key is already in the map.
+  template<bool Bwd=false>
+  stack_iterator<Bwd> dir_iter_after(triemap_iterator_buffer& buf, elt_t key) {
+    stack_iterator<Bwd> it(buf);
+    assert(!root.is_nil());
+
+    ref_t q = ref_t::nil();
+    ref_t p = root;
+
+    // Find the first change of direction.
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+        goto has_q;
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    return it;
+  has_q:
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        it.stack.push(q);
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    while(!q.is_leaf()) {
+      // Finish expanding q to a leaf.
+      it.stack.push(q.branch()->child[Bwd]);
+      q = q.branch()->child[1 - Bwd];
+    }
+    it.top = q.leaf();
+    return it;
+  }
+
+  // Precondition: key is already in the map.
+  template<bool Bwd=false>
+  leaf_t* dir_succ(elt_t key) {
+    assert(!root.is_nil());
+
+    ref_t q = ref_t::nil();
+    ref_t p = root;
+
+    // Find the first change of direction.
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+        goto has_q;
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    return nullptr;
+  has_q:
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    while(!q.is_leaf())
+      q = q.branch()->child[1 - Bwd];
+    return q.leaf();
+  }
+
+  stack_iterator<> fwd_begin(triemap_iterator_buffer& buf) {
+    return dir_iter_begin<false>(buf);
+  }
+  stack_iterator<> fwd_end(triemap_iterator_buffer& buf) { return stack_iterator<>(buf); }
+
+  stack_iterator<true> bwd_begin(triemap_iterator_buffer& buf) {
+    return dir_iter_begin<true>(buf);
+  }
+  stack_iterator<true> bwd_end(triemap_iterator_buffer& buf) { return stack_iterator<true>(buf); }
+  
+  triemap(void)
+    : root(ref_t::nil())
+  { } 
+
+  triemap(triemap&& o)
+    : root(o.root) {
+    o.root = ref_t::nil();
+  }
+
+  triemap& operator=(triemap&& o) {
+    root = o.root; o.root = ref_t::nil();
+    return *this;
+  }
+
+  ~triemap()
+  {
+    if(!root.is_nil())
+      free_node(root);
+  }
+
+  bool empty(void) const { return root.is_nil(); }
+
+  void remove(elt_t e)
+  {
+    if(root.is_nil())
+      return;
+
+    ref_t p = root;
+    node_t* q = nullptr;
+
+    ref_t* whereq = nullptr;
+    ref_t* wherep = &(root);
+    uint64_t dir;
+
+    while(p.is_branch()) {
+      whereq = wherep;
+      q = p.branch();
+      dir = _dir(q, e);
+      wherep = q->child + dir;
+      p = *wherep;
+    }
+
+    // If value not in the trie, terminate
+    leaf_t* leaf = p.leaf();
+    if(e != leaf->key)
+      return;
+
+    delete leaf;
+    // Collapse the last decision.
+    if(!whereq)
+    {
+      root = ref_t::nil();
+      return;
+    }
+    (*whereq) = q->child[1 - dir];
+    delete q;
+  }
+
+  bool mem(elt_t e) const {
+    if(root.is_nil())
+      return false;
+
+    leaf_t* leaf = locate(e);
+    return (e == leaf->key);
+  }
+
+  V* find(elt_t elt) {
+    if(root.is_nil())
+      return nullptr;
+
+    leaf_t* leaf = locate(elt);
+    if(leaf->key != elt)
+      return nullptr;
+    return &(leaf->value);
+  }
+
+  void insert(elt_t elt, V val) {
+    if(root.is_nil()) {
+      leaf_t* new_leaf = new leaf_t(elt, val);
+      root = ref_t::of_leaf(new_leaf);
+      return;
+    }
+
+    leaf_t* leaf = locate(elt);
+    if(leaf->key == elt) {
+      leaf->value = val;
+      return;
+    }
+
+    leaf_t* new_leaf = new leaf_t(elt, val);
+
+    // Actually the complement of the mask we'll
+    // eventually add.
+    elt_t delta = leaf->key ^ elt;
+
+    ref_t* dest = &root;
+    node_t* br = nullptr;
+    while(dest->is_branch()) {
+      br = dest->branch();
+      // Check whether the next branch drops beneath the
+      // first changed bit.
+      if( (br->mask+1) & delta )
+        break;
+      dest = br->child + _dir(br, elt);
+    }
+
+    // Construct the new node.
+    uintptr_t msb = get_msb(delta);
+    // High child goes on the left.
+    ref_t ref = (msb & elt) ? make_node(~msb, ref_t::of_leaf(new_leaf), *dest)
+      : make_node(~msb, *dest, ref_t::of_leaf(new_leaf));
+    *dest = ref;
+  }
+
+  iterator begin(void) const { return iterator(root); }
+  iterator end(void) const { return iterator(root, nullptr); }
+protected:
+  void free_node(ref_t ref) {
+    if(!ref.is_branch())
+      return;
+
+    node_t* ptr(ref.branch());
+    free_node(ptr->child[0]);
+    free_node(ptr->child[1]);
+    delete ptr;
+  }
+
+  ref_t make_node(uint64_t mask, ref_t left, ref_t right)
+  {
+    node_t* ptr = new node_t;
+    ptr->mask = mask;
+    ptr->child[0] = left;
+    ptr->child[1] = right;
+    
+    return ref_t::of_node(ptr);
+  }
+
+  // Extract the most significant 1-bit
+  uint64_t get_msb(uint64_t x)
+  {
+    // Alternatively, use bit-smearing.
+    // return (1<<(31-__builtin_clz(x)));
+    static_assert(sizeof(uint64_t) == sizeof(unsigned long long),
+      "uint64_trie: compiler intrinsic for wrong bit-width");
+    return ((uint64_t) 1)<<(63-__builtin_clzll(x));
+  }
+
+  // Find the leaf where [elt] would reside
+  leaf_t* locate(elt_t elt) const {
+    assert(!root.is_nil());
+
+    ref_t ref = root;
+    // While we're at an internal node
+    while(ref.is_branch()) {
+      ref = ref.child(elt);
+    }
+    return ref.leaf();
+  }
+
+  ref_t root;
+};
 
 #endif
