@@ -281,6 +281,292 @@ struct term {
   patom_t x;
 };
 
+// sum_{c_i b_i} <= k
+// Basically the same as bool_lin_ge, but without the constant.
+template<class V>
+class pb_lin_le : public propagator, public prop_inst< pb_lin_le<V> > {
+  typedef pb_lin_le<V> P;
+
+public:
+  struct term {
+    V c; 
+    patom_t x;
+  };
+
+  bool check_sat(ctx_t& ctx) {
+    if(!r.lb(ctx))
+      return true;
+    V low = 0;
+    for(term t : range(xs, xs+sz)) {
+      if(t.x.lb(ctx))
+        low += t.c;
+    }
+    return low <= k;
+  }
+  bool check_unsat(ctx_t& ctx) { return !check_sat(ctx); }
+  
+  // Ensure fixed terms are removed, and all coefficients
+  // are positive.
+  template<class It>
+  static It normalize_inplace(solver_data* s, It begin, It end, V& k) {
+    const ctx_t& ctx(s->ctx());
+    It dest(begin);
+
+    for(term t : range(begin, end)) {
+      // Must be zero
+      if(!t.c || !t.x.ub(ctx))
+        continue;
+      // Must be nonzero
+      if(t.x.lb(ctx)) {
+        k -= t.c;
+        continue;
+      }
+      // Could be either.
+      if(t.c < 0) {
+        // Rewrite -kx to (-k) + (k ~x).
+        k -= t.c;
+        t = term { -t.c, ~t.x };
+      }
+      *dest = t;
+      ++dest;
+    }
+    // Now order the survivors by decreasing coefficient.
+    end = dest;
+    std::sort(begin, end, [](const term& s, const term& t) { return s.c > t.c; });
+    return end;
+  }
+
+  // Parameters
+  term* xs; // size sz+1, has a 0-coeff sentinel at the end.
+  int sz;
+  V k;
+  patom_t r;
+  
+  trailed<V> slack;
+  trailed<int> head;
+
+  watch_result wake_r(int _x) {
+    head.set(s->persist, 0);
+    if(slack < xs[0].c)
+      queue_prop();
+    return Wt_Keep;
+  }
+  watch_result wake_x(int xi) {
+    slack.set(s->persist, slack - xs[xi].c);
+    if(slack < xs[head].c)
+      queue_prop();
+    return Wt_Keep;
+  }
+  
+  template<class Ex>
+  void get_expl(int ex_var, V ex_lb, Ex& expl) {
+    assert(ex_lb >= 0);
+    // Just run left to right until we reach the threshold
+    V ex_remaining(ex_lb);
+    const ctx_t ctx(s->ctx());
+    for(int ii = 0; ii < sz; ++ii) {
+      if(ii == ex_var)
+        continue;
+      if(xs[ii].x.lb(ctx)) {
+        EX_PUSH(expl, ~xs[ii].x);
+        if(xs[ii].c > ex_remaining)
+          return;
+        ex_remaining -= xs[ii].c;
+      }
+    }
+    GEAS_ERROR;
+  }
+
+  void ex_r(int _pi, pval_t p, vec<clause_elt>& confl) {
+    get_expl(sz, k, confl);
+  }
+  void ex_x(int xi, pval_t p, vec<clause_elt>& confl) {
+    EX_PUSH(confl, ~r);
+    get_expl(xi, k - xs[xi].c, confl);
+  }
+  
+  // Should only be called after normalization & simplification.
+  template<class It>
+  pb_lin_le(solver_data* s, It xs_begin, It xs_end, V _k, patom_t _r)
+    : propagator(s), sz(xs_end - xs_begin), k(_k), r(_r), slack(k), head(sz) {
+    xs = new term[sz+1];
+    int ii = 0;
+    for(auto t : range(xs_begin, xs_end)) {
+      xs[ii] = t;
+      ++ii;
+    }
+    xs[sz] = term { 0, at_True };
+    
+    for(int ii = 0; ii < sz; ++ii)
+      attach(s, xs[ii].x, this->template watch<&P::wake_x>(ii));
+
+    slack = k;
+    if(r.lb(s->ctx())) { // Is the constraint already enforced?
+      // This shouldn't need to propagate immediately, because
+      // that case is handled during propagation.
+      head.x = 0;
+    } else {
+      attach(s, r, this->template watch<&P::wake_r>(0));
+    }
+  }
+
+  bool propagate(vec<clause_elt>& confl) {
+    if(slack < 0) {
+      return enqueue(*s, ~r, this->template expl<&P::ex_r>(0, expl_thunk::Ex_BTPRED));
+    }
+    if(!r.lb(s->ctx())) {
+      return true;
+    }
+
+    const ctx_t& ctx(s->ctx());
+    if(xs[head].c > slack) {
+      int curr = head;
+      do {
+        // Skip anything that is already counted in slack.
+        if(!xs[curr].x.lb(ctx)) {
+          if(!enqueue(*s, ~xs[curr].x, this->template expl<&P::ex_x>(curr, expl_thunk::Ex_BTPRED)))
+            return false;
+        }
+        ++curr;
+      } while(xs[curr].c > slack);
+      // Finished. Update head.
+      head.set(s->persist, curr);
+    }
+    return true;
+  }
+};
+
+// Standard binary encoding of atmost1.
+bool atmost_1_binary_root(solver_data* s, vec<patom_t>& xs) {
+  int B = 64 - __builtin_clzll(xs.size());
+  vec<patom_t> sel;
+  for(int bi = 0; bi < B; ++bi)
+    sel.push(new_bool(*s));
+
+  for(int ii = 0; ii < xs.size(); ++ii) {
+    patom_t x(xs[ii]);
+    for(int bi = 0; bi < B; ++bi) {
+      if(ii & (1ul << bi)) {
+        add_clause(s, ~x, sel[bi]);
+      } else {
+        add_clause(s, ~x, ~sel[bi]);
+      }
+    }
+  }
+  return true;
+}
+
+// r -> atmost_1(xs)
+// Uses dual-rail encoding for selector, so it can propagate r on
+// an inconsistent assignment.
+bool atmost_1_binary_imp(solver_data* s, vec<patom_t>& xs, patom_t r) {
+  int B = 64 - __builtin_clzl(xs.size());
+  vec<patom_t> sel_pos;
+  vec<patom_t> sel_neg;
+  for(int bi = 0; bi < B; ++bi) {
+    patom_t b_p(new_bool(*s));
+    patom_t b_n(new_bool(*s));
+    add_clause(s, ~r, ~b_p, ~b_n);
+    sel_pos.push(b_p);
+    sel_neg.push(b_n);
+  }
+
+  for(int ii = 0; ii < xs.size(); ++ii) {
+    patom_t x(xs[ii]);
+    for(int bi = 0; bi < B; ++bi) {
+      if(ii & (1ul << bi)) {
+        add_clause(s, ~x, sel_pos[bi]);
+      } else {
+        add_clause(s, ~x, sel_neg[bi]);
+      }
+    }
+  }
+  return true;
+}
+
+bool atmost_1(solver_data* s, vec<patom_t>& xs, patom_t r) {
+  // ps[ii] is the index of the true element.
+  /*
+  pid_t ps = new_pred(*s, 0, xs.size()-1); 
+  for(int ii : irange(xs.size())) {
+    if(!add_clause(s, ~r, ge_atom(ps, ii), ~xs[ii]))
+      return false;
+    if(!add_clause(s, ~r, le_atom(ps, ii), ~xs[ii]))
+      return false;
+  }
+  */
+  if(xs.size() <= 1) {
+    return true;
+  } else if(xs.size() == 2) {
+    return add_clause(s, ~r, ~xs[0], ~xs[1]);
+  } else if(r.lb(s->ctx())) {
+    // Root constraint
+    return atmost_1_binary_root(s, xs);
+  } else {
+    return atmost_1_binary_imp(s, xs, r);
+  }
+}
+
+typedef pb_lin_le<int> pblin_int_t;
+
+bool bool_linear_le(solver_data* s,  vec<int>& cs, vec<patom_t>& xs, int k, patom_t r) {
+  vec<pblin_int_t::term> terms;
+  for(int ii = 0; ii < xs.size(); ++ii)
+    terms.push(pblin_int_t::term { cs[ii], xs[ii] });
+
+  auto end = pblin_int_t::normalize_inplace(s, terms.begin(), terms.end(), k);
+  terms.shrink(terms.end() -  end);
+
+  if(k < 0) {
+    return enqueue(*s, ~r, reason());
+  }
+
+  // Deal with any terms that are too big separately.
+  auto begin = terms.begin();
+  for(; begin != end; ++begin) {
+    if(begin->c <= k)
+      break;
+    if(!add_clause(s, ~r, ~begin->x))
+      return false;
+  }
+
+  // After simplification, check if the
+  // remaining values could still violate.
+  int sum_all = 0;
+  for(auto t : range(begin, end)) {
+    sum_all += t.c;
+  }
+  if(sum_all <= k) {
+    return true;
+  }
+
+  // Remaining values are individually okay,
+  // but collectively infeasible.
+  if(sum_all - (end-1)->c <= k) {
+    // Any one false is enough. Add a clause.
+    vec<clause_elt> cl;
+    cl.push(~r);
+    for(auto t : range(begin, end))
+      cl.push(~t.x);
+    return add_clause(*s, cl);
+  }  else if( (end-2)->c + (end-1)->c > k) {
+    // Atmost one constraint. */
+    vec<patom_t> x_atoms;
+    for(auto t : range(begin, end)) x_atoms.push(t.x);
+    return atmost_1(s, x_atoms, r);
+  } else { 
+    // Final case. Actually post the constraint.
+    return pblin_int_t::post(s, begin, end, k, r);
+  }
+}
+
+bool bool_linear_ge(solver_data* s, vec<int>& cs, vec<patom_t>& xs, int k, patom_t r) {
+  vec<int> neg_cs;
+  for(int c : cs)
+    neg_cs.push(-c);
+  // bool_linear_le will do the rest of the normalization.
+  return bool_linear_le(s, neg_cs, xs, -k, r);
+}
 /*
 struct {
   int operator()(const term& a, const term& b) const {
@@ -289,17 +575,6 @@ struct {
 } term_lt;
 */
 
-bool atmost_1(solver_data* s, vec<patom_t>& xs, patom_t r) {
-  // ps[ii] is the index of the true element.
-  pid_t ps = new_pred(*s, 0, xs.size()-1); 
-  for(int ii : irange(xs.size())) {
-    if(!add_clause(s, ~r, ge_atom(ps, ii), ~xs[ii]))
-      return false;
-    if(!add_clause(s, ~r, le_atom(ps, ii), ~xs[ii]))
-      return false;
-  }
-  return true;
-}
 
 bool atmost_k(solver_data* s, vec<patom_t>& xs, int k, patom_t r) {
   pid_t ps = new_pred(*s, 0, xs.size()-1);
