@@ -148,7 +148,7 @@ int test_linear_conflict() {
 }
 
 int main(int argc, char** argv) {
-  //  test_atmost1();
+  test_atmost1();
   test_linear_le();
   test_linear_ge();
   test_linear_conflict();

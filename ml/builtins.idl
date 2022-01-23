@@ -54,7 +54,7 @@ quote(ml, "let bool_linear_ne s r xs k = \
 quote(ml, "let bool_linear_le_cst s r xs k = \
   I.bool_linear_le_cst s r (Array.map to_at_linterm xs) k");
 quote(ml, "let bool_linear_ge_cst s r xs k = \
-  I.bool_linear_ge s r (Array.map to_at_linterm xs) k");
+  I.bool_linear_ge_cst s r (Array.map to_at_linterm xs) k");
 boolean int_mul([in] solver s, atom r, intvar z, intvar x, intvar y);
 boolean int_div([in] solver s, atom r, intvar z, intvar x, intvar y);
 boolean int_abs([in] solver s, atom r, intvar z, intvar x);

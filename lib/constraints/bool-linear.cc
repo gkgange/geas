@@ -438,7 +438,7 @@ public:
 
 // Standard binary encoding of atmost1.
 bool atmost_1_binary_root(solver_data* s, vec<patom_t>& xs) {
-  int B = 64 - __builtin_clzll(xs.size());
+  int B = 8*sizeof(unsigned int) - __builtin_clz(xs.size());
   vec<patom_t> sel;
   for(int bi = 0; bi < B; ++bi)
     sel.push(new_bool(*s));
@@ -460,7 +460,7 @@ bool atmost_1_binary_root(solver_data* s, vec<patom_t>& xs) {
 // Uses dual-rail encoding for selector, so it can propagate r on
 // an inconsistent assignment.
 bool atmost_1_binary_imp(solver_data* s, vec<patom_t>& xs, patom_t r) {
-  int B = 64 - __builtin_clzl(xs.size());
+  int B = 8*sizeof(unsigned int) - __builtin_clz(xs.size());
   vec<patom_t> sel_pos;
   vec<patom_t> sel_neg;
   for(int bi = 0; bi < B; ++bi) {
