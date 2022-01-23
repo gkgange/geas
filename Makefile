@@ -58,6 +58,7 @@ FZN_TARGETS = fzn/fzn_geas fzn/fzn_geas.debug
 
 #TARGETS = $(TESTS)
 LIB = libgeas.a
+SHARED = libgeas.so
 all: $(TARGETS) $(LIB) $(MLTARGETS) $(FZN_TARGETS)
 
 ## Dependencies
@@ -82,10 +83,17 @@ $(TARGETS):
 	@echo Linking: "$@ ( $^ )"
 	@$(CXX) $^ $(LFLAGS) -o $@
 
+lib: $(LIB)
+shared: $(SHARED)
+
 libgeas.a: $(COBJS) $(LIBOBJS)
 	@echo Archiving: "$@ ( $^ )"
 	ar rc $@ $^
 	ranlib $@
+
+libgeas.so: $(COBJS) $(LIBOBJS)
+	@echo Making shared library: "$@ ( $^ )"
+	@$(CXX) $(LFLAGS) -shared -o $@ $<
 
 ml/libgeas_ml.a ml/geas.a ml/geas.cmxa ml/geas.cma : libgeas.a
 	@echo Building ML interface

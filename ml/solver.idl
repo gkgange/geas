@@ -88,6 +88,7 @@ limits unlimited(void);
 boolean is_consistent([in] solver s);
 result solve([in] solver s, limits l);
 [mlname(abort)] void abort_solve([in] solver s);
+void reset([in] solver s);
 
 boolean post_atom([in] solver s, atom at);
 

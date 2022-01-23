@@ -745,6 +745,17 @@ protected:
   ref_t root;
 };
 
+// Helper structure for the stack-based
+// iterator, so we don't have a bunch of
+// allocation.
+
+class triemap_iterator_buffer {
+  uintptr_t buf[64];
+ public:
+  const uintptr_t& operator[](int i) const { return buf[i]; }
+  uintptr_t& operator[](int i) { return buf[i]; }
+};
+
 // Yet another *slightly* different trie variant.
 // TODO: unify as many of these as is possible.
 template<class V>
@@ -769,6 +780,9 @@ protected:
     static ref_t of_leaf(leaf_t* ptr) { return reinterpret_cast<uintptr_t>(ptr) | 1; }
     static ref_t of_node(node_t* ptr) { return reinterpret_cast<uintptr_t>(ptr); }
     static ref_t nil(void) { return ref_t(0); }
+
+    static ref_t of_uint(uintptr_t p) { return ref_t(p); }
+    uintptr_t to_uint(void) const { return p; }
 
     bool is_nil(void) const { return !p; }
     bool is_branch(void) const { return ! (p&1); }
@@ -853,6 +867,160 @@ public:
     leaf_t* leaf;
   };
 
+  struct ref_stack {
+  public:
+    /*
+    ref_stack(triemap_iterator_buffer& _buf, int _sz)
+    : buf(_buf), sz(_sz) { }
+    */
+    ref_stack(triemap_iterator_buffer& _buf)
+    : buf(_buf), sz(0) { }
+
+    bool is_empty(void) const { return !sz; }
+    ref_t pop(void) {
+      assert(sz);
+      --sz;
+      return ref_t::of_uint(buf[sz]);
+    }
+    void push(ref_t ref) {
+      buf[sz++] = ref.to_uint();
+    }
+    void clear(void) { sz = 0; }
+
+    const ref_t& top(void) const { assert(sz); return buf[sz-1]; }
+
+    triemap_iterator_buffer& buf;
+    int sz;
+  };
+
+  template<bool Bwd = false>
+  struct stack_iterator {
+  stack_iterator(triemap_iterator_buffer& _buf)
+    : stack(ref_stack(_buf)), top(nullptr) { }
+
+    // Only well-behaved for end().
+    bool operator!=(const stack_iterator<Bwd>& o) { return top != o.top; }
+
+    stack_iterator<Bwd>& operator++(void) {
+      if(stack.is_empty()) {
+        top = nullptr;
+      } else {
+        ref_t p = stack.pop();
+        while(!p.is_leaf()) {
+          stack.push(p.branch()->child[Bwd]);
+          p = p.branch()->child[1 - Bwd];
+        }
+        top = p.leaf();
+      }
+      return *this;
+    }
+    leaf_t& operator*(void) const { return *top; }
+
+    ref_stack stack;
+    leaf_t* top;
+  };
+
+
+  template<bool Bwd=false>
+  stack_iterator<Bwd> dir_iter_begin(triemap_iterator_buffer& buf) {
+    stack_iterator<Bwd> it(buf);
+    if(!root.is_nil()) {
+      auto p = root;
+      while(!p.is_leaf()) {
+        it.stack.push(p.branch()->child[Bwd]);
+        p = p.branch()->child[1 - Bwd];
+      }
+      it.top = p.leaf();
+    }
+    return it;
+  }
+
+  // Precondition: key is already in the map.
+  template<bool Bwd=false>
+  stack_iterator<Bwd> dir_iter_after(triemap_iterator_buffer& buf, elt_t key) {
+    stack_iterator<Bwd> it(buf);
+    assert(!root.is_nil());
+
+    ref_t q = ref_t::nil();
+    ref_t p = root;
+
+    // Find the first change of direction.
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+        goto has_q;
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    return it;
+  has_q:
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        it.stack.push(q);
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    while(!q.is_leaf()) {
+      // Finish expanding q to a leaf.
+      it.stack.push(q.branch()->child[Bwd]);
+      q = q.branch()->child[1 - Bwd];
+    }
+    it.top = q.leaf();
+    return it;
+  }
+
+  // Precondition: key is already in the map.
+  template<bool Bwd=false>
+  leaf_t* dir_succ(elt_t key) {
+    assert(!root.is_nil());
+
+    ref_t q = ref_t::nil();
+    ref_t p = root;
+
+    // Find the first change of direction.
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+        goto has_q;
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    return nullptr;
+  has_q:
+    while(!p.is_leaf()) {
+      int dir = p.dir(key);
+      if(dir ^ Bwd) {
+        q = p.branch()->child[Bwd];
+        p = p.branch()->child[1-Bwd];
+      } else {
+        p = p.branch()->child[Bwd];
+      }
+    }
+    while(!q.is_leaf())
+      q = q.branch()->child[1 - Bwd];
+    return q.leaf();
+  }
+
+  stack_iterator<> fwd_begin(triemap_iterator_buffer& buf) {
+    return dir_iter_begin<false>(buf);
+  }
+  stack_iterator<> fwd_end(triemap_iterator_buffer& buf) { return stack_iterator<>(buf); }
+
+  stack_iterator<true> bwd_begin(triemap_iterator_buffer& buf) {
+    return dir_iter_begin<true>(buf);
+  }
+  stack_iterator<true> bwd_end(triemap_iterator_buffer& buf) { return stack_iterator<true>(buf); }
+  
   triemap(void)
     : root(ref_t::nil())
   { } 

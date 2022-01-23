@@ -24,14 +24,22 @@ exception Unknown_constraint of string
 
 let put = Format.fprintf
 
+let resolve_name ident anns =
+  let rec aux anns = match anns with
+    | [] -> ident
+    | (Pr.Ann_call ("mzn_expression_name", [|Pr.Ann_str name|])) :: _ -> name
+    | _ :: anns' -> aux anns'
+  in
+  aux anns
+
 let print_atom problem env =
   (* Build translation table *)
   let ivar_names = H.create 17 in
   let atom_names = H.create 17 in
   Dy.iteri (fun idx info ->
-    H.add ivar_names (Sol.ivar_pred env.ivars.(idx)) info.Pr.id
+    H.add ivar_names (Sol.ivar_pred env.ivars.(idx)) (resolve_name info.Pr.id info.Pr.ann)
   ) problem.Pr.ivals ;
-  Dy.iteri (fun idx (id, _) -> H.add atom_names env.bvars.(idx) id) problem.Pr.bvals ;
+  Dy.iteri (fun idx (id, anns) -> H.add atom_names env.bvars.(idx) (resolve_name id anns)) problem.Pr.bvals ;
   (* Now, the actual function *)
   (fun fmt at ->
     try
@@ -53,7 +61,7 @@ let ivar_name problem env =
   (* Build translation table *)
   let ivar_names = H.create 17 in
   Dy.iteri (fun idx info ->
-    H.add ivar_names env.ivars.(idx) info.Pr.id
+    H.add ivar_names env.ivars.(idx) (resolve_name info.Pr.id info.Pr.ann)
   ) problem.Pr.ivals ;
   (* Now, the actual function *)
   (fun x ->

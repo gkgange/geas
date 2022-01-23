@@ -41,6 +41,8 @@ boolean bool_linear_ne([in] solver s, atom r, [in,size_is(sz)] at_linterm ts[], 
 quote(ml, "let to_at_linterm cx = { I.ac = fst cx; I.ax = snd cx }");
 quote(mli, "val bool_linear_le : Solver.t -> Atom.t -> Solver.intvar -> (int * Atom.t) array -> int -> bool");
 quote(mli, "val bool_linear_ge : Solver.t -> Atom.t -> Solver.intvar -> (int * Atom.t) array -> int -> bool");
+quote(mli, "val bool_linear_le_cst : Solver.t -> Atom.t -> (int * Atom.t) array -> int -> bool");
+quote(mli, "val bool_linear_ge_cst : Solver.t -> Atom.t -> (int * Atom.t) array -> int -> bool");
 quote(mli, "val bool_linear_ne : Solver.t -> Atom.t -> (int * Atom.t) array -> int -> bool");
 quote(ml, "let bool_linear_le s r z xs k = \
   I.bool_linear_le s r z (Array.map to_at_linterm xs) k");
@@ -49,6 +51,10 @@ quote(ml, "let bool_linear_ge s r z xs k = \
 quote(ml, "let bool_linear_ne s r xs k = \
   I.bool_linear_ne s r (Array.map to_at_linterm xs) k");
 
+quote(ml, "let bool_linear_le_cst s r xs k = \
+  I.bool_linear_le_cst s r (Array.map to_at_linterm xs) k");
+quote(ml, "let bool_linear_ge_cst s r xs k = \
+  I.bool_linear_ge_cst s r (Array.map to_at_linterm xs) k");
 boolean int_mul([in] solver s, atom r, intvar z, intvar x, intvar y);
 boolean int_div([in] solver s, atom r, intvar z, intvar x, intvar y);
 boolean int_abs([in] solver s, atom r, intvar z, intvar x);

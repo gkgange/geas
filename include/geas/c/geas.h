@@ -120,6 +120,7 @@ limits max_conflicts(int c);
 int is_consistent(solver);
 result solve(solver, limits);
 void abort_solve(solver);
+void reset(solver);
 
 int post_atom(solver, atom);
 int post_clause(solver, atom*, int);
