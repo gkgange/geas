@@ -93,7 +93,7 @@ libgeas.a: $(COBJS) $(LIBOBJS)
 
 libgeas.so: $(COBJS) $(LIBOBJS)
 	@echo Making shared library: "$@ ( $^ )"
-	@$(CXX) $(LFLAGS) -shared -o $@ $<
+	@$(CXX) $(LFLAGS) -shared -o $@ $^
 
 ml/libgeas_ml.a ml/geas.a ml/geas.cmxa ml/geas.cma : libgeas.a
 	@echo Building ML interface

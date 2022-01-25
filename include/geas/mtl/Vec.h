@@ -31,6 +31,36 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 //
 // NOTE! Don't use this vector on datatypes that cannot be re-located in memory (with realloc)
 
+// Ugly hack to deal with gcc getting more aggressive about exploiting
+// technically UB reallocs.
+template<class T, bool B>
+struct conservative_realloc_impl {
+};
+template<class T>
+struct conservative_realloc_impl<T, false> {
+  inline static T* _realloc(T* old_mem, int old_sz, int new_sz) {
+    assert(old_sz < new_sz);
+    T* mem = static_cast<T*>(malloc(sizeof(T) * new_sz));
+    for(int ii = 0; ii < old_sz; ++ii) {
+      new (mem + ii) T(std::move(old_mem[ii]));
+      old_mem[ii].~T();
+    }
+    free(old_mem);
+    return mem;
+  }
+};
+template<class T>
+struct conservative_realloc_impl<T, true> {
+  inline static T* _realloc(T* old_mem, int old_sz, int new_sz) {
+    return static_cast<T*>(realloc(old_mem, sizeof(T) * new_sz));
+  }
+};
+
+template<class T>
+inline T* conservative_realloc(T* old_mem, int old_sz, int new_sz) {
+  return conservative_realloc_impl<T, std::is_trivially_copyable<T>::value>::_realloc(old_mem, old_sz, new_sz);
+}
+
 template<class T>
 class vec {
     T*  data;
@@ -142,10 +172,10 @@ public:
 
     // Stack interface:
 #if 1
-    void     push  (void)              { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = (T*)realloc(data, cap * sizeof(T)); } new (&data[sz]) T(); sz++; }
-    void     push  (const T& elem)     { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = (T*)realloc(data, cap * sizeof(T)); } new (&data[sz]) T(elem); sz++; }
-    // void     push  (const T& elem)     { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = (T*)realloc(data, cap * sizeof(T)); } data[sz++] = elem; }
-    void     push  (T&& elem)     { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = (T*)realloc(data, cap * sizeof(T)); } new (&data[sz]) T(std::move(elem)); sz++; }
+  void     push  (void)              { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = conservative_realloc(data, sz, cap); } new (&data[sz]) T(); sz++; }
+  void     push  (const T& elem)     { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = conservative_realloc(data, sz, cap); } new (&data[sz]) T(elem); sz++; }
+
+  void     push  (T&& elem)     { if (sz == cap) { cap = imax(2, (cap*3+1)>>1); data = conservative_realloc(data, sz, cap); } new (&data[sz]) T(std::move(elem)); sz++; }
     void     push_ (const T& elem)     { assert(sz < cap); data[sz++] = elem; }
 #else
     void     push  (void)              { if (sz == cap) grow(sz+1); new (&data[sz]) T()    ; sz++; }
@@ -172,7 +202,8 @@ void vec<T>::grow(int min_cap) {
     if (min_cap <= cap) return;
     if (cap == 0) cap = (min_cap >= 2) ? min_cap : 2;
     else          do cap = (cap*3+1) >> 1; while (cap < min_cap);
-    data = (T*)realloc(data, cap * sizeof(T)); }
+    data = conservative_realloc(data, sz, cap * sizeof(T));
+}
 
 template<class T>
 void vec<T>::growTo(int size, const T& pad) {

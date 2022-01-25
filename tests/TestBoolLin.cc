@@ -11,7 +11,7 @@ vec<geas::patom_t> boolvec(geas::solver_data* s, int N) {
     xs.push(new_bool(*s));
   return xs;
 }
-int test_atmost1() {
+void test_atmost1() {
   int N = 11;
 
   {
@@ -61,7 +61,7 @@ int test_atmost1() {
   }
 }
 
-int test_linear_le() {
+void test_linear_le() {
   {
     geas::solver s;
     geas::solver_data* sd(s.data);
@@ -104,7 +104,7 @@ int test_linear_le() {
   }
 }
 
-int test_linear_ge() {
+void test_linear_ge() {
   {
     geas::solver s;
     geas::solver_data* sd(s.data);
@@ -135,7 +135,7 @@ int test_linear_ge() {
   }
 }
 
-int test_linear_conflict() {
+void test_linear_conflict() {
   geas::solver s;
   geas::solver_data* sd(s.data);
 

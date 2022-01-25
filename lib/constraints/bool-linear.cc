@@ -409,6 +409,7 @@ public:
       attach(s, r, this->template watch<&P::wake_r>(0));
     }
   }
+  ~pb_lin_le(void) { delete[] xs; }
 
   bool propagate(vec<clause_elt>& confl) {
     if(slack < 0) {
