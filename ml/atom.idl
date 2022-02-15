@@ -19,3 +19,5 @@ quote(MLI, "val at_True : atom");
 quote(ML, "let at_True = { pid = Int32.zero ; value = Int64.zero }");
 quote(MLI, "val at_False : atom");
 quote(ML, "let at_False = neg at_True");
+quote(MLI, "val at_Undef : atom");
+quote(ML, "let at_Undef = { pid = Int32.minus_one ; value = Int64.zero }");

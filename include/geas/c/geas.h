@@ -113,6 +113,8 @@ brancher get_brancher(solver);
 
 brancher toggle_brancher(brancher*, int);
 
+brancher external_brancher(atom (*branch)(void*), void (*finalize)(void*), void* data);
+
 limits unlimited(void);
 limits max_time(int s);
 limits max_conflicts(int c);
