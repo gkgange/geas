@@ -133,16 +133,24 @@ predicate int_lin_eq_reif(
 %predicate bool_eq_reif(var bool: x, var bool: y, var bool: r) =
 %  r <-> (x <-> y);
 predicate bool_xor(var bool: x, var bool: y, var bool: r) =
-     bool_clause([x,y],[r])
-  /\ bool_clause([],[x,y,r])
-  /\ bool_clause([x, r], [y])
-  /\ bool_clause([y, r], [x]);
+     clause([x,y],[r])
+  /\ clause([],[x,y,r])
+  /\ clause([x, r], [y])
+  /\ clause([y, r], [x]);
+
+predicate bool_xor_imp(var bool: x, var bool: y, var bool: r) =
+     clause([x,y],[r])
+  /\ clause([],[x,y,r]);
+
+predicate bool_eq_imp(var bool: x, var bool: y, var bool: r) =
+     clause([x],[y,r])
+  /\ clause([y],[x,r]);
 
 predicate set_in_reif(var int: x, set of int: s, var bool: r) =
   if card(s) = max(s) - min(s) + 1 then
     r <-> (x >= min(s) /\ x <= max(s)) 
   else
-    bool_clause([x = k | k in s], [r]) /\ forall (k in s) (x = k -> r)
+    clause([x = k | k in s], [r]) /\ forall (k in s) (x = k -> r)
   endif;
 
 predicate int_pow(var int: x, var int: y, var int: z) =

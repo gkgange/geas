@@ -328,6 +328,16 @@ let int_lin_eq_reif solver args anns =
     && post_lin_ne solver (At.neg r) cs xs k
   | _ -> failwith "Expected bool-sorted value for reif-var."
 
+let int_lin_eq_imp solver args anns =
+  let cs = Pr.get_array Pr.get_int args.(0) in
+  let xs = Pr.get_array (fun x -> x) args.(1) in
+  let k = Pr.get_int args.(2) in
+  match args.(3) with
+  | Pr.Blit true -> post_lin_eq solver At.at_True cs xs k
+  | Pr.Blit false -> true
+  | Pr.Bvar r -> post_lin_eq solver r cs xs k
+  | _ -> failwith "Expected bool-sorted value for imp-var."
+
 let int_lin_ne_reif solver args anns =
   let cs = Pr.get_array Pr.get_int args.(0) in
   let xs = Pr.get_array (fun x -> x) args.(1) in
@@ -344,11 +354,20 @@ let int_lin_ne_HR solver args anns =
   let cs = Pr.get_array Pr.get_int args.(0) in
   let xs = Pr.get_array (fun x -> x) args.(1) in
   let k = Pr.get_int args.(2) in
+  match get_HR_var args.(3) args.(4) with
+  | Pr.Bv_bool true -> post_lin_ne solver At.at_True cs xs k
+  | Pr.Bv_bool false -> true
+  | Pr.Bv_var r -> post_lin_ne solver r cs xs k
+
+let int_lin_ne_imp solver args anns =
+  let cs = Pr.get_array Pr.get_int args.(0) in
+  let xs = Pr.get_array (fun x -> x) args.(1) in
+  let k = Pr.get_int args.(2) in
   match args.(3) with
   | Pr.Blit true -> post_lin_ne solver At.at_True cs xs k
   | Pr.Blit false -> true
   | Pr.Bvar r -> post_lin_ne solver r cs xs k
-  | _ -> failwith "Expected bool-sorted value for reif-var."
+  | _ -> failwith "Expected bool-sorted value for imp-var."
 
 let bool2int solver args anns =
   let b = Pr.get_bvar args.(0) in
@@ -842,9 +861,11 @@ let initialize () =
      "int_lin_le_imp", int_lin_le_imp ;
      "int_lin_eq", int_lin_eq ;
      "int_lin_eq_reif", int_lin_eq_reif ;
+     "int_lin_eq_imp", int_lin_eq_imp ;
      "int_lin_ne", int_lin_ne ;
      "int_lin_ne_reif", int_lin_ne_reif ;
      "int_lin_ne_HR", int_lin_ne_HR ;
+     "int_lin_ne_imp", int_lin_ne_imp ;
      "int_eq", int_eq ;
      "int_ne", int_ne ;
      "int_le", int_le ;
