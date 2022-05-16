@@ -4,6 +4,7 @@
 #include <geas/engine/propagator_ext.h>
 #include <geas/solver/solver_data.h>
 #include <geas/vars/intvar.h>
+#include <geas/constraints/builtins.h>
 #include <geas/mtl/bool-set.h>
 #include <geas/mtl/p-sparse-set.h>
 #include <geas/utils/interval.h>
@@ -69,20 +70,16 @@ public:
   imax(solver_data* s, intvar _z, vec<intvar>& _xs)
     : propagator(s), z(_z), xs(_xs),
       sep_val(lb(z)), z_change(0), supp_change(0) { 
-    z.attach(E_LB, watch_callback(wake_z, this, 0, true));
-    z.attach(E_UB, watch_callback(wake_z, this, 1, true));
+    z.attach(E_LB, watch_callback(wake_z, this, E_LB, true));
+    z.attach(E_UB, watch_callback(wake_z, this, E_UB, true));
 
-    lb_supp = ub_supp = 0;
-    int lb = xs[lb_supp].lb(s);
+    ub_supp = 0;
     int ub = xs[ub_supp].ub(s);
-    for(int ii = 0; ii < xs.size(); ii++) {
-      if(xs[ii].lb(s) < lb) {
-        lb_supp = ii;
-        lb = xs[ii].lb(s);
-      }
-      if(xs[ii].ub(s) > ub) {
+    for(int ii = 0; ii < _xs.size(); ii++) {
+      int x_ub = xs[ii].ub(s);
+      if(x_ub > ub) {
         ub_supp = ii;
-        ub = xs[ii].ub(s);
+        ub = x_ub;
       }
       xs[ii].attach(E_LB, watch_callback(wake_x, this, ii<<1, true));
       xs[ii].attach(E_UB, watch_callback(wake_x, this, (ii<<1)|1, true));
@@ -93,6 +90,7 @@ public:
       maybe_max.insert(xi);
 
     lb_change.growTo(xs.size()); 
+
   }
 
   inline void mm_remove(int k, bool& mm_trailed) {
@@ -130,12 +128,6 @@ public:
     }
 
     if(seen_ub < ub(z)) {
-      /*
-      expl_builder e(s->persist.alloc_expl(1 + xs.size()));
-      for(intvar x : xs)
-        e.push(x > seen_ub);
-      if(!z.set_ub(seen_ub, *e))
-        */
       if(!set_ub(z, seen_ub, ex_thunk(ex<&P::ex_z_ub>, 0)))
         return false;
     }
@@ -277,7 +269,6 @@ protected:
   vec<intvar> xs;
 
   // Persistent state
-  unsigned int lb_supp;
   unsigned int ub_supp;
   p_sparseset maybe_max; // The set of vars (possibly) above lb(z)
   intvar::val_t sep_val;
@@ -380,12 +371,55 @@ void imax_decomp(solver_data* s, intvar z, vec<intvar>& xs) {
   add_clause(*s, elts);
 }
 
+bool simplify_max(solver_data* s, intvar z, vec<intvar>& xs) {
+  int x_low = INT_MIN;
+  int x_high = INT_MIN;
+  for(intvar x : xs) {
+    x_low = std::max(x_low, (int) x.lb(s));
+    x_high = std::max(x_high, (int) x.ub(s));
+  }
+
+  int z_lb = z.lb(s);
+  int z_ub = z.ub(s);
+  if(z_lb < x_low) {
+    if(!enqueue(*s, z >= x_low, reason()))
+      return false;
+    z_lb = x_low;
+  }
+  if(z_ub > x_high) {
+    if(!enqueue(*s, z <= x_high, reason()))
+      return false;
+    z_ub = x_high;
+  }
+
+  intvar* it = xs.begin();
+  intvar* dest = it;
+  intvar* e = xs.end();
+  for(; it != e; ++it) {
+    intvar x = *it;
+    if(x.ub(s) < z_lb)
+      continue;
+    if(x.ub(s) > z_ub && !enqueue(*s, x <= z_ub, reason()))
+      return false;
+    *dest = x;
+    ++dest;
+  }
+  xs.shrink(e - dest);
+
+  return true;
+}
+
 bool int_max(solver_data* s, intvar z, vec<intvar>& xs, patom_t r) {
   // FIXME: Choose whether to use propagator or decomposition
   // imax_decomp(s, z, xs);
   if(!s->state.is_entailed_l0(r))
     GEAS_WARN("Half-reified int_max not yet implemented.");
-
+  assert(xs.size() > 0);
+  if(!simplify_max(s, z, xs))
+    return false;
+  if(xs.size() == 1) {
+    return int_eq(s, z, xs[0], r);
+  }
   // new imax(s, z, xs);
   // return true;
   return imax::post(s, z, xs);

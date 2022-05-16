@@ -93,10 +93,59 @@ void test3(void) {
   }
 }
 
+void testMax(void) {
+  {
+    solver s;
+    solver_data* sd(s.data);
+  
+    intvar z = s.new_intvar(-20, 20);
+    intvar x = s.new_intvar(-20, 20);
+    intvar y = s.new_intvar(-20, 20);
+    vec<intvar> xs { x, y };
+    int_max(sd, z, xs);
+
+    assert(s.is_consistent());
+    s.assume(x >= 5);
+    s.assume(y <= 0);
+    assert(s.is_consistent());
+    assert(z.lb(sd->ctx()) == 5);
+    s.assume(z >= 2);
+    solver::result r = s.solve();
+    assert(r == solver::SAT);
+
+    s.clear_assumptions();
+    s.assume(y <= 0);
+    s.assume(z >= 5);
+    assert(s.is_consistent());
+    assert(x.lb(sd->ctx()) == 5);
+  }
+
+  {
+    solver s;
+    intvar z = s.new_intvar(-20, 20);
+    intvar x = s.new_intvar(10, 20);
+    intvar y = s.new_intvar(-20, 14);
+    vec<intvar> xs { x, y };
+    int_max(s.data, z, xs);
+    assert(s.is_consistent());
+    assert(z.lb(s.data->ctx()) == 10);
+    s.assume(z <= 11);
+    assert(s.is_consistent());
+    assert(x.ub(s.data->ctx()) == 11);
+    assert(y.ub(s.data->ctx()) == 11);
+    s.retract();
+    s.assume(x >= 16);
+    assert(s.is_consistent());
+    assert(z.lb(s.data->ctx()) == 16);
+  }
+}
+  
 int main(int argc, char** argv) {
   test1();
   test2();
   test3();
+  
+  testMax();
 
   return 0;
 }
