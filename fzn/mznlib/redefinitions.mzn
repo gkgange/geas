@@ -33,6 +33,7 @@
 %  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 %
 %
+include "nosets.mzn";
 
 %% New annotations
 annotation assume(array[int] of var bool: b);
