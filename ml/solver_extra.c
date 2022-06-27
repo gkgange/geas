@@ -16,6 +16,8 @@
 #include <geas/c/geas.h>
 
 extern value camlidl_c2ml_atom_atom(atom *, camlidl_ctx _ctx);
+extern void camlidl_ml2c_atom_atom(value, atom *, camlidl_ctx _ctx);
+extern value camlidl_c2ml_solver_brancher(brancher *, camlidl_ctx _ctx);
 
 CAMLprim value ml_get_conflict(value _s) {
   CAMLparam1 (_s);
@@ -61,6 +63,40 @@ CAMLprim value ml_assumption_inferences(value _s) {
   camlidl_free(_ctx);
   free(arr);
   CAMLreturn (_res);
+}
+
+atom call_ml_brancher(void* closure) {
+  struct camlidl_ctx_struct _ctxs = { CAMLIDL_TRANSIENT, NULL };
+  camlidl_ctx _ctx = &_ctxs;
+
+  atom res_atom;
+  camlidl_ml2c_atom_atom(caml_callback(*((value*) closure), Val_unit), &res_atom, _ctx);
+  camlidl_free(_ctx);
+
+  return res_atom;
+}
+
+void finalize_ml_brancher(void* closure) {
+  CAMLparam0();
+  caml_remove_global_root((value*) closure);
+  CAMLreturn0;
+}
+
+value ml_external_brancher(value _callback) {
+  CAMLparam1 (_callback);
+  CAMLlocal1 (_brancher);
+
+  struct camlidl_ctx_struct _ctxs = { CAMLIDL_TRANSIENT, NULL };
+  camlidl_ctx _ctx = &_ctxs;
+
+  value* mem = malloc(sizeof(value));
+  *mem = _callback;
+  caml_register_global_root(mem);
+  brancher b = external_brancher(call_ml_brancher, finalize_ml_brancher, (void*) mem);
+
+  _brancher = camlidl_c2ml_solver_brancher(&b, _ctx);
+  camlidl_free(_ctx);
+  CAMLreturn (_brancher);
 }
 
 CAMLprim value ml_get_ivar_activities(value _s, value _xs) {

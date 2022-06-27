@@ -1,9 +1,4 @@
-predicate global_cardinality(array[int] of var int: x,
-                             array[int] of int: cover,
-                             array[int] of int: count) =
-               fzn_global_cardinality(x, cover, count);
-
-predicate global_cardinality(array[int] of var int: x,
+predicate fzn_global_cardinality(array[int] of var int: x,
                              array[int] of int: cover,
                              array[int] of var int: count) =
   forall (i in index_set(cover)) (

@@ -258,6 +258,28 @@ brancher toggle_brancher(brancher* ts, int sz) {
   return (brancher) geas::toggle_brancher(bs);
 }
 
+class c_external_brancher : public geas::brancher {
+public:
+  c_external_brancher(atom (*_branch)(void*), void (*_finalize)(void*), void* _body)
+    : branch_fun(_branch), finalize_fun(_finalize), body(_body) { }
+  ~c_external_brancher(void) {
+    finalize_fun(body);
+  }
+  geas::patom_t branch(geas::solver_data* s) {
+    return get_atom(branch_fun(body));
+  }
+  bool is_fixed(geas::solver_data* s) {
+    return false;
+  }
+  atom (*branch_fun)(void*);
+  void (*finalize_fun)(void*);
+  void* body;
+};
+
+brancher external_brancher(atom (*branch)(void*), void (*finalize)(void*), void* body) {
+  return (brancher) new c_external_brancher(branch, finalize, body);
+}
+
 void add_brancher(solver s, brancher b) {
   get_solver(s)->data->branchers.push((geas::brancher*) b);
 }

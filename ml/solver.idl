@@ -68,6 +68,7 @@ solver new_solver([in] options o);
 int solver_id([in] solver s);
 // bool propagate([in] solver);
 
+quote(mlmli, "external external_brancher : (unit -> Atom.t) -> brancher = \"ml_external_brancher\"");
 brancher new_int_brancher(var_choice varc, val_choice valc, [in,size_is(sz)] intvar vs[], int sz);
 brancher new_bool_brancher(var_choice varc, val_choice valc, [in,size_is(sz)] atom vs[], int sz);
 brancher new_bool_priority_brancher(var_choice varc,
