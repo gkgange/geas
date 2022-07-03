@@ -170,3 +170,7 @@ predicate int_pow(var int: x, int: y, var int: z) =
       z = x * zp * zp
     endif
   endif;
+
+predicate int_mod(var int: x, int: k, var int: z) =
+  let { array [dom(x)] of int: A = array1d(dom(x), [ i mod k | i in dom(x)]) ; } in
+  z = A[x];

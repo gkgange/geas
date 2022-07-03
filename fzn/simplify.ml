@@ -560,9 +560,11 @@ let simp_lin_eq pr st args anns =
   match defined_var pr anns with
   | Some v ->
     begin
+      (*
       match def_of_lineq v ts' k' with
       | Some (ds, c) -> apply_idef st v (Iv_lin (ds, c))
       | None -> 
+       *)
         Dy.add st.cons (("int_lin_eq", rebuild_lin_args (Array.of_list ts') k'), anns)
     end
   | None ->
