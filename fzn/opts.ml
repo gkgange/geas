@@ -46,7 +46,7 @@ let core_type = ref IntCore
 let core_factor_coeff = ref true
 
 let one_watch = ref true
-let global_diff = ref false
+let global_diff = ref true
 
 let check = ref false
 
@@ -90,8 +90,20 @@ let (speclist:(Arg.key * Arg.spec * Arg.doc) list) =
       " : check solutions"
      ) ;
      (
-      "-f",
+      "--alternating",
       Arg.Unit (fun () -> free := true),
+      " : alternating fixed/activity search"
+     ) ;
+     (
+      "-f",
+      Arg.Unit (fun () ->
+          begin
+            free := true ;
+            obj_probe_limit := Some 50 ;
+            core_opt := true ;
+            core_harden := true ;
+            core_ratio := Some 0.1
+          end),
       " : free search"
      ) ;
      (*

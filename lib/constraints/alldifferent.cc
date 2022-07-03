@@ -1728,6 +1728,8 @@ bool all_different_int(solver_data* s, const vec<intvar>& xs, patom_t r = at_Tru
     lb = std::min(lb, (int) x.lb(s));
     ub = std::max(ub, (int) x.ub(s));
   }
+#if 0
+  // Temporary disabling alldiff_dc because of unresolved bug.
   if(ub - lb + 1 == xs.size()) {
     // Permutation
     return alldiff_dc::post(s, xs);
@@ -1737,6 +1739,9 @@ bool all_different_int(solver_data* s, const vec<intvar>& xs, patom_t r = at_Tru
     // return alldiff_b::post(s, xs);
   }
   // return alldiff_v::post(s, xs);
+#else
+  return alldiff_v::post(s, xs) && alldiff_b::post(s, xs);
+#endif
 }
 
 bool all_different_except_0(solver_data* s, const vec<intvar>& xs, patom_t r = at_True) {

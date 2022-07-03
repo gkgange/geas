@@ -1404,8 +1404,8 @@ end = struct
 
   let rec solve config solver state =
     (* Format.fprintf Format.err_formatter "%% [%d | %d].@." state.obj_lb state.obj_ub ; *)
-    assert (state.obj_lb <= state.obj_ub) ;
-    if state.obj_lb = state.obj_ub then
+    (* assert (state.obj_lb <= state.obj_ub) ; *)
+    if state.obj_lb >= state.obj_ub then
       Opt state.incumbent
     else
       match try_state solver state config.limits (* (relative_limits solver config.limits) *) with

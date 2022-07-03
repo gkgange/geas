@@ -844,6 +844,23 @@ let bool_linear_le solver args anns =
   let k = Pr.get_int args.(3) in
   B.bool_linear_le solver (At.at_True) z (Array.mapi (fun i x -> cs.(i), x) xs) k
 
+let fzn_bool_lin_ge solver args anns =
+  let cs = Pr.get_array Pr.get_int args.(0) in
+  let xs = Pr.get_array get_atom args.(1) in
+  match Pr.get_ival args.(2) with
+  | Pr.Iv_var k -> B.bool_linear_le solver (At.at_True) k (Array.mapi (fun i x -> cs.(i), x) xs) 0
+  | Pr.Iv_int k -> B.bool_linear_ge_cst solver (At.at_True) (Array.mapi (fun i x -> cs.(i), x) xs) k
+
+let fzn_bool_lin_le solver args anns =
+  let cs = Pr.get_array Pr.get_int args.(0) in
+  let xs = Pr.get_array get_atom args.(1) in
+  match Pr.get_ival args.(2) with
+  | Pr.Iv_var k -> B.bool_linear_ge solver (At.at_True) k (Array.mapi (fun i x -> cs.(i), x) xs) 0
+  | Pr.Iv_int k -> B.bool_linear_le_cst solver (At.at_True) (Array.mapi (fun i x -> cs.(i), x) xs) k
+
+let fzn_bool_lin_eq solver args anns =
+  (fzn_bool_lin_le solver args anns) && (fzn_bool_lin_ge solver args anns)
+
 (* Maybe separate this out into a separate
  * per-solver registrar *)
 let initialize () =
@@ -890,8 +907,9 @@ let initialize () =
      "array_bool_and", array_bool_and ;
      "array_bool_or", array_bool_or ;
      (* "bool_sum_le", bool_sum_le ; *)
-     "bool_lin_ge", bool_linear_ge ;
-     "bool_lin_le", bool_linear_le ;
+     "bool_lin_ge", fzn_bool_lin_ge ;
+     "bool_lin_le", fzn_bool_lin_le ;
+     "bool_lin_eq", fzn_bool_lin_eq ;
      "atmost_one", atmost_one ;
      "atmost_k", atmost_k ;
      "array_int_element", array_int_element ; 
