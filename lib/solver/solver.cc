@@ -53,6 +53,7 @@ using std::endl;
 using std::min;
 using std::max;
 using std::sort;
+using std::isfinite;
 
 #ifdef LOG_RESTART
 static double domains_total = 0;
